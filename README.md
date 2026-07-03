@@ -90,3 +90,7 @@ start, ok := r.StartTime()
 ## 요구사항
 
 Go 1.22+ (표준 라이브러리만). 테스트: `go test ./gmc/` (동시성 검증은 `-race` 지원 플랫폼에서 `go test -race ./gmc/`).
+
+## 라이선스
+
+Apache License 2.0 — [`LICENSE`](LICENSE) 참조.
