@@ -223,6 +223,33 @@ func (r *Reader) SeekPTS(id TrackID, pts uint64) (*Iterator, error) {
 	return &Iterator{r: r, off: off, filter: map[TrackID]bool{id: true}}, nil
 }
 
+// ReadInterleaved iterates frames of the given tracks (all tracks when none
+// specified) in storage order, starting at the minimum offset among each
+// track's last sync point at or before pts — so no track misses its own
+// sync point for the target position.
+func (r *Reader) ReadInterleaved(pts uint64, tracks ...TrackID) (*Iterator, error) {
+	ids := tracks
+	if len(ids) == 0 {
+		ids = r.trackIDs()
+	}
+	filter := make(map[TrackID]bool, len(ids))
+	start := r.committed.Load()
+	for _, id := range ids {
+		if !r.hasTrack(id) {
+			return nil, ErrUnknownTrack
+		}
+		filter[id] = true
+		off, ok := r.idx.seek(id, pts)
+		if !ok {
+			off = r.streamStart
+		}
+		if off < start {
+			start = off
+		}
+	}
+	return &Iterator{r: r, off: start, filter: filter}, nil
+}
+
 // Close closes the reader's file handle.
 func (r *Reader) Close() error {
 	return r.f.Close()
