@@ -66,11 +66,49 @@ func Open(path string) (*Reader, error) {
 		tracks:      map[TrackID]TrackInfo{},
 	}
 	if err := r.loadFooter(size); err != nil {
-		// Task 12 replaces this with a r.scan(size) fallback.
-		f.Close()
-		return nil, err
+		r.scan(size)
 	}
 	return r, nil
+}
+
+// scan recovers an unfinalized or crashed file by a forward pass that
+// CRC-verifies every chunk (payload included — page-cache flush order gives
+// no ordering guarantee, so headers alone cannot be trusted). The first
+// invalid chunk marks the logical EOF. Sync points after the last checkpoint
+// are collected from Data chunk keyframe flags.
+func (r *Reader) scan(size int64) {
+	off := r.streamStart
+	var tail []cpEntry
+	for {
+		typ, payload, next, err := readChunkAt(r.f, off, size)
+		if err != nil {
+			break // io.EOF or corruption: off is the logical EOF
+		}
+		switch typ {
+		case chunkTrackInfo:
+			if info, _, derr := decodeTrackInfo(payload); derr == nil {
+				r.tracks[info.ID] = info
+			}
+		case chunkCheckpoint:
+			if _, entries, derr := decodeCheckpoint(payload); derr == nil {
+				for _, e := range entries {
+					r.idx.add(e.track, e.pts, e.off)
+				}
+			}
+			tail = tail[:0] // everything before this checkpoint is covered
+		case chunkData:
+			if id, flags, pts, derr := decodeDataHeader(payload); derr == nil && flags&flagKeyframe != 0 {
+				tail = append(tail, cpEntry{id, pts, off})
+			}
+		default:
+			// unknown chunk type: skip for forward compatibility
+		}
+		off = next
+	}
+	for _, e := range tail {
+		r.idx.add(e.track, e.pts, e.off)
+	}
+	r.committed.Store(off)
 }
 
 // loadFooter validates the trailer and loads tracks + index from the footer.
