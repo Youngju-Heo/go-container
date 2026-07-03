@@ -1,7 +1,7 @@
 # GMC (Go Media Container) 포맷 설계
 
 - 작성일: 2026-07-03
-- 상태: 초안 (검토 대기)
+- 상태: 리뷰 반영 완료 (최종 승인 대기)
 - 작업명(working name): `gmc` — 확정 전 변경 가능
 
 ## 1. 배경과 목표
@@ -26,6 +26,8 @@
 ### 비목표 (Non-goals)
 
 - 프로세스 간 / 네트워크 파일시스템 동시접근 보장 (포맷은 방해하지 않으나 SDK가 보장하지 않음)
+- 동일 파일 다중 writer 방지 — 프로세스 내에서는 SDK가 같은 경로의 중복 Create를
+  막지만, 프로세스 간 잠금은 제공하지 않는다 (운영 책임)
 - ffmpeg 등 기존 도구의 직접 재생
 - 기록된 데이터의 수정/삭제 (append-only)
 - 코덱 처리 — 컨테이너는 압축된 프레임을 바이트로만 취급
@@ -38,8 +40,9 @@
 2. **자기서술(self-delimiting) 청크** — 각 청크는 길이·타입·CRC를 가져 앞에서부터
    순차 스캔만으로 전체 구조를 복원할 수 있다.
 3. **인덱스는 데이터를 따라간다** — MKV처럼 마지막에 몰아 쓰지 않고, 주기적
-   체크포인트 청크로 스트림 중간에 박아 넣는다. 뒤로 연결 리스트(backward chain)를
-   이뤄 미완성 파일에서도 시크가 가능하다.
+   체크포인트 청크로 스트림 중간에 박아 넣는다. 덕분에 미완성 파일에서도 시크가
+   가능하다. (체크포인트끼리는 backward chain으로도 연결해 두어 향후 역방향
+   스캔 최적화 여지를 남긴다 — v1 리더는 전방 스캔만 사용, §5.3)
 4. **단순함 우선** — EBML 같은 범용 가변 구조 대신 고정 레이아웃 + 소수의 청크 타입.
 
 ## 3. 온디스크 포맷
@@ -106,6 +109,8 @@ crc          u32   CRC-32C(seq..entries)
   쓰던 슬롯의 CRC가 깨지므로 자동으로 직전 값으로 폴백 — 찢어진 쓰기에 안전하다.
 - **용량은 생성 시 고정** (기본 8 KiB = 4 KiB 슬롯 × 2, `CreateOptions`로 조정).
   직렬화 크기가 슬롯을 넘으면 `ErrTagsTooLarge` — 세션 속성은 소량을 가정한다.
+- **초기 상태**: 생성 시 영역 전체를 zero-fill. 유효한 슬롯이 하나도 없으면
+  "태그 없음"으로 해석한다(에러 아님). seq는 1부터 시작.
 - Well-known key는 `gmc.` 접두사로 예약한다:
 
 | key | value | 의미 |
@@ -133,12 +138,17 @@ offset  size  field
   (payload는 건너뛰므로 실제 읽기량은 헤더 몇 바이트씩).
 - CRC 불일치 = 거기서부터 찢어진(torn) 쓰기 → **그 직전이 논리적 EOF**.
   append-only + 로컬 FS 특성상 손상은 꼬리에서만 발생한다고 가정한다(§6).
+- **payloadLen 상한 = 256 MiB.** 상한 초과 또는 파일 범위를 벗어나는 길이는
+  손상으로 간주하고 CRC 불일치와 동일하게 처리한다 (스캔 폭주 방어).
+- **미지 타입은 건너뛴다 (forward-compat)**: CRC가 유효하면 모르는 type의 청크는
+  skip한다. 향후 버전이 새 청크 타입을 추가해도 구버전 리더가 파일을 읽을 수 있다.
+  (기존 청크의 의미 변경은 헤더 version으로만 한다)
 
 ### 3.5 청크 타입
 
 | type | 이름 | 용도 |
 |---|---|---|
-| 0x01 | TrackInfo | 트랙 등록. 데이터가 나오기 전 어느 시점이든 추가 가능 |
+| 0x01 | TrackInfo | 트랙 등록. 해당 트랙의 첫 Data 청크 이전이면 스트림 어디서든 추가 가능 |
 | 0x02 | Data | 프레임/샘플 1개 |
 | 0x03 | IndexCheckpoint | 주기적 인덱스 체크포인트 |
 | 0x04 | Footer | Finalize 시 통합 인덱스 (파일 마지막) |
@@ -156,6 +166,12 @@ privateLen   u32 + bytes   트랙 레벨 private data (SPS/PPS, 스키마 등)
 
 - `kind`는 분류 힌트일 뿐, 컨테이너 동작은 kind에 의존하지 않는다.
   트랙 조합에 제약이 없다 — 오디오+메타데이터만, 메타데이터 단일 트랙 파일도 유효.
+- **공통 시간 원점**: 모든 트랙은 timebase가 달라도 **pts 0이 같은 시점(세션 원점)**을
+  가리킨다. 프레임의 절대시각 = `gmc.start_time_unix_ns` + pts × num/den (§3.3).
+  이 규약이 트랙 간 동기화와 절대시간 시크의 근거다.
+- 컨테이너는 코덱 불가지(codec-agnostic)다 — 프레임 해석에 필요한 정보
+  (예: PCM의 sampleRate/channels, FLAC의 STREAMINFO, H.264의 SPS/PPS)는
+  애플리케이션이 codec 문자열과 트랙 private data로 약속한다.
 
 **Data payload**
 
@@ -166,6 +182,9 @@ pts          u64   (트랙 timebase 단위)
 data         나머지 전부 (payloadLen - 11 바이트)
 ```
 
+- **트랙 내 pts는 단조 비감소** (같은 값 허용 — 동일 시각 다중 이벤트).
+  `WriteFrame`은 위반 시 `ErrNonMonotonicPTS`를 반환한다 — 타임스탬프 정리는
+  호출자 책임. 인덱스와 시크의 정확성은 이 불변식 위에 성립한다.
 - 저장 순서 = 디코드 순서로 정의한다. B-frame 재정렬(pts≠dts)이 필요해지면
   flags 비트 + 선택적 dts 필드로 v2에서 확장한다 (현 단계 비목표).
 - 메타데이터 트랙도 동일한 Data 청크를 쓴다 — pts를 가진 JSON/바이너리 이벤트 스트림.
@@ -198,8 +217,9 @@ entries[]:
 **Footer payload** (Finalize 시에만)
 
 ```
+전 트랙 TrackInfo 사본 (Footer만 읽고도 트랙 구성·코덱·private data를 알 수 있게)
 전 트랙 통합 인덱스 (IndexCheckpoint entries와 동일 형식의 전체 목록)
-duration 등 요약 정보
+트랙별 요약: firstPTS, lastPTS, 프레임 수   (duration은 파생값)
 ```
 
 (Tags는 Footer에 넣지 않는다 — 앞쪽 Tags 영역(§3.3)이 항상 최신 값의 유일한 위치)
@@ -214,6 +234,8 @@ endMagic      "GMCE" (4)
 
 리더는 파일 끝 16바이트를 먼저 확인해 트레일러가 유효하면 **한 번의 시크로 전체
 인덱스를 로드**하고, 없으면(미완성/크래시 파일) 순차 스캔으로 폴백한다.
+트레일러 채택 조건: endMagic·trailerCRC 일치 + footerOffset이 파일 범위 내 +
+그 위치의 Footer 청크 CRC까지 유효. 하나라도 어긋나면 스캔 폴백.
 **Footer는 편의 캐시일 뿐이며 Footer 없이도 모든 정보가 스트림 안에 있다.**
 
 ## 4. 동시성 모델 (프로세스 내)
@@ -245,6 +267,8 @@ endMagic      "GMCE" (4)
   RWMutex로 공유. 시크는 파일 스캔 없이 메모리에서 해결된다.
   온디스크 체크포인트는 **크래시 후/별도 오픈** 경로 전용.
 - **라이브 테일**: reader가 `sync.Cond`(또는 채널)로 새 청크 커밋을 대기 — 폴링 없음.
+  **종료 의미론**: writer가 Finalize/Close 하면 팔로워는 남은 커밋분을 소진한 뒤
+  EOF로 종료를 통지받는다. reader 쪽 ctx 취소로도 종료된다.
 - **디스크 반영(fsync)**: 기본은 OS에 위임(페이지 캐시), 옵션으로 주기적 fsync 제공.
   §6의 복구 보장은 "fsync된 지점까지"가 아니라 "디스크에 실제 도달한 지점까지"이다.
 
@@ -275,6 +299,20 @@ torn write 주입(무작위 지점 절단) 테스트를 필수로 포함한다.
 
 ## 5. 읽기 경로 3가지
 
+어떤 경로로 얻든 인덱스의 실체는 **트랙별 pts 오름차순 (pts, offset) 배열**이고,
+시크는 2단계로 동작한다:
+
+```
+① 이진 탐색 — 목표 pts 이하의 마지막 sync point 엔트리를 찾는다
+② 전방 스캔 — 그 오프셋부터 청크를 순회하며 정확한 프레임까지 이동
+   (다른 트랙 청크는 헤더만 읽고 payloadLen으로 skip.
+    스캔 거리 ≈ 영상은 GOP 1개, 오디오/메타데이터는 체크포인트 주기)
+```
+
+영상 시크가 키프레임에서 시작하는 것은 디코딩상으로도 필수다(중간 프레임은
+키프레임 없이 디코드 불가). 멀티트랙 통합 시크는 각 대상 트랙의 ① 결과 중
+**최소 오프셋**에서 ②를 시작한다 — 모든 트랙이 자기 sync point를 지나치지 않는다.
+
 ### 5.1 쓰는 중 — 같은 프로세스 (주 시나리오)
 
 `writer.NewReader()` 로 획득. in-memory 인덱스 + committedSize 공유.
@@ -282,13 +320,21 @@ torn write 주입(무작위 지점 절단) 테스트를 필수로 포함한다.
 
 ### 5.2 완성된 파일
 
-`gmc.Open(path)` → 트레일러 확인 → Footer 인덱스 한 번에 로드.
+`gmc.Open(path)` → 트레일러 확인 → Footer 하나로 트랙 구성 + 전체 인덱스 +
+요약을 한 번에 로드. 스트림 스캔 없음.
 
 ### 5.3 미완성/크래시 파일
 
 `gmc.Open(path)` → 트레일러 없음 → 앞에서부터 청크 헤더만 순차 스캔하며
 인덱스 재구성, CRC 실패 지점 직전을 논리적 EOF로 확정. 복구 도구 불필요.
-(대용량 파일 최적화가 필요해지면 backward chain 활용은 그때 추가한다.)
+
+- TrackInfo → 트랙 등록, IndexCheckpoint → 엔트리를 인덱스에 병합,
+  Data → payloadLen으로 건너뜀 (내용은 읽지 않음)
+- 마지막 체크포인트 이후 꼬리 구간(및 체크포인트가 아예 없는 파일)은 스캔 중
+  만나는 Data 청크의 keyframe 플래그로 인덱스를 보충한다 — 이때는 payload 앞
+  11바이트(trackID/flags/pts)까지 읽는다.
+- I/O는 청크당 수십 바이트 + 체크포인트들뿐이라 GB급 파일도 빠르게 열린다.
+  (그래도 느려지면 backward chain 최적화를 그때 추가한다 — v1은 전방 스캔만)
 
 ## 6. 내구성과 복구
 
@@ -315,19 +361,24 @@ video, err := w.AddTrack(gmc.TrackInfo{
     Private: avcConfig,                  // 트랙 레벨 private data
 })
 err = w.WriteFrame(video, gmc.Frame{PTS: pts, Keyframe: true, Data: nal})
+                                         // 트랙 내 pts 역행 시 ErrNonMonotonicPTS
 
 // 세션 메타정보 (녹화 도중 언제든 추가/갱신 가능, 앞쪽 Tags 영역에 제자리 기록)
 err = w.SetStartTime(time.Now())         // gmc.start_time_unix_ns 편의 API
 err = w.SetTag("gmc.location", []byte("37.5665,126.9780"))
 err = w.SetTag("camera.id", []byte("cam-03"))  // 슬롯 초과 시 ErrTagsTooLarge
 
-err = w.Finalize()                       // Footer 기록 후 close
+err = w.Finalize()                       // Footer+트레일러 기록 후 close
+// 또는 w.Close()                        // Footer 없이 닫기 — 유효한 미완성 파일로
+                                         // 남고, 재오픈 시 스캔 경로로 열림
 
 // 쓰는 중 읽기 (같은 프로세스)
 r := w.NewReader()
-it, err := r.SeekPTS(video, targetPTS)   // 과거 구간 랜덤 시크
+it, err := r.SeekPTS(video, targetPTS)   // 단일 트랙 과거 구간 시크
+mux, err := r.ReadInterleaved(targetPTS) // 전 트랙 저장 순서 순회 (가변 인자로 트랙 필터)
 for it.Next() { frame := it.Frame(); ... }
-tail, err := r.Follow(ctx, video)        // 라이브 테일 (커밋될 때마다 수신)
+tail, err := r.Follow(ctx, video)        // 라이브 테일. 인자 없으면 전 트랙.
+                                         // writer Finalize/Close 시 잔여 소진 후 EOF
 
 // 완성/크래시 파일 열기
 r, err := gmc.Open("rec.gmc")            // Footer 있으면 즉시, 없으면 스캔 복구
