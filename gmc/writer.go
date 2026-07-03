@@ -1,6 +1,7 @@
 package gmc
 
 import (
+	"encoding/binary"
 	"errors"
 	"os"
 	"sync"
@@ -192,6 +193,53 @@ func (w *Writer) WriteFrame(id TrackID, fr Frame) error {
 		w.pending = append(w.pending, cpEntry{id, fr.PTS, off})
 	}
 	return nil
+}
+
+// SetTag adds or updates one session tag. The full snapshot is rewritten into
+// the inactive slot of the tags area (ping-pong), so a torn write can never
+// destroy the previous value.
+func (w *Writer) SetTag(key string, value []byte) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed {
+		return ErrClosed
+	}
+	next := make(map[string][]byte, len(w.tags)+1)
+	for k, v := range w.tags {
+		next[k] = v
+	}
+	next[key] = append([]byte(nil), value...)
+	buf := encodeTagsSlot(w.tagsSeq+1, next)
+	if len(buf) > w.slotSize {
+		return ErrTagsTooLarge
+	}
+	off := w.tagsOff + int64(w.nextSlot)*int64(w.slotSize)
+	if _, err := w.f.WriteAt(buf, off); err != nil {
+		return err
+	}
+	w.tagsSeq++
+	w.nextSlot = 1 - w.nextSlot
+	w.tags = next
+	return nil
+}
+
+// SetStartTime stores the absolute wall-clock time of pts 0 (all tracks share
+// the same time origin) under the TagStartTime key.
+func (w *Writer) SetStartTime(t time.Time) error {
+	var v [8]byte
+	binary.LittleEndian.PutUint64(v[:], uint64(t.UnixNano()))
+	return w.SetTag(TagStartTime, v[:])
+}
+
+// tagsSnapshot returns a copy of the current tags map.
+func (w *Writer) tagsSnapshot() map[string][]byte {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	out := make(map[string][]byte, len(w.tags))
+	for k, v := range w.tags {
+		out[k] = v
+	}
+	return out
 }
 
 // Sync flushes file contents to stable storage.
