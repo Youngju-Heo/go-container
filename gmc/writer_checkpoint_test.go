@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// 바이트 트리거: cpBytes=1이면 sync point가 쌓일 때마다 체크포인트가 기록된다.
+// Byte trigger: with cpBytes=1, a checkpoint is written each time a sync point accumulates.
 func TestCheckpointByteTrigger(t *testing.T) {
 	w, path := newTestWriter(t, CreateOptions{CheckpointBytes: 1, CheckpointInterval: time.Hour})
 	video, _ := w.AddTrack(TrackInfo{Kind: KindVideo, Codec: "h264", TimebaseNum: 1, TimebaseDen: 90000})
@@ -34,7 +34,7 @@ func TestCheckpointByteTrigger(t *testing.T) {
 	w.Close()
 }
 
-// 오디오 샘플링: 한 체크포인트 구간에서 트랙당 첫 sync point 1개만 인덱싱.
+// Audio sampling: only the first sync point per track is indexed within one checkpoint interval.
 func TestCheckpointAudioSampling(t *testing.T) {
 	w, _ := newTestWriter(t, CreateOptions{CheckpointBytes: 1 << 30, CheckpointInterval: time.Hour})
 	audio, _ := w.AddTrack(TrackInfo{Kind: KindAudio, Codec: "pcm_s16le", TimebaseNum: 1, TimebaseDen: 48000})
@@ -48,7 +48,7 @@ func TestCheckpointAudioSampling(t *testing.T) {
 	w.Close()
 }
 
-// 체크포인트 이후 샘플링 플래그가 리셋되어 다음 구간의 첫 오디오 프레임이 다시 인덱싱된다.
+// After a checkpoint, the sampling flag resets so the next interval's first audio frame is indexed again.
 func TestCheckpointResetsSampling(t *testing.T) {
 	w, _ := newTestWriter(t, CreateOptions{CheckpointBytes: 1, CheckpointInterval: time.Hour})
 	audio, _ := w.AddTrack(TrackInfo{Kind: KindAudio, Codec: "flac", TimebaseNum: 1, TimebaseDen: 48000})
