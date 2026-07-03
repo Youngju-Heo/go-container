@@ -1,0 +1,177 @@
+package gmc
+
+import (
+	"encoding/binary"
+	"os"
+	"sort"
+	"sync/atomic"
+	"time"
+)
+
+// Reader provides random access and tailing over a GMC file. Live readers
+// (from Writer.NewReader) share the writer's in-memory index and committed
+// size; opened readers own an index built from the footer or a recovery scan.
+type Reader struct {
+	f *os.File
+	w *Writer // non-nil for live readers
+
+	idx         *fileIndex
+	committed   *atomic.Int64
+	streamStart int64
+
+	private []byte
+	tags    map[string][]byte
+	tracks  map[TrackID]TrackInfo
+}
+
+// Open opens an existing GMC file. A valid trailer loads everything from the
+// footer in one read; otherwise the file is recovered by a full CRC scan.
+func Open(path string) (*Reader, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	hdr, headerLen, err := decodeFileHeader(f)
+	if err != nil {
+		f.Close()
+		return nil, err
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, err
+	}
+	size := fi.Size()
+	streamStart := headerLen + int64(hdr.tagsAreaLen)
+	if size < streamStart {
+		f.Close()
+		return nil, ErrCorrupt
+	}
+	area := make([]byte, hdr.tagsAreaLen)
+	if _, err := f.ReadAt(area, headerLen); err != nil {
+		f.Close()
+		return nil, err
+	}
+	tags, _, _ := pickTagsSlot(area)
+	if tags == nil {
+		tags = map[string][]byte{}
+	}
+	r := &Reader{
+		f:           f,
+		idx:         newFileIndex(),
+		committed:   new(atomic.Int64),
+		streamStart: streamStart,
+		private:     hdr.private,
+		tags:        tags,
+		tracks:      map[TrackID]TrackInfo{},
+	}
+	if err := r.loadFooter(size); err != nil {
+		// Task 12 replaces this with a r.scan(size) fallback.
+		f.Close()
+		return nil, err
+	}
+	return r, nil
+}
+
+// loadFooter validates the trailer and loads tracks + index from the footer.
+func (r *Reader) loadFooter(size int64) error {
+	if size < r.streamStart+trailerSize {
+		return ErrCorrupt
+	}
+	var tb [trailerSize]byte
+	if _, err := r.f.ReadAt(tb[:], size-trailerSize); err != nil {
+		return err
+	}
+	footerOff, ok := decodeTrailer(tb[:])
+	if !ok || footerOff < r.streamStart || footerOff >= size-trailerSize {
+		return ErrCorrupt
+	}
+	typ, payload, next, err := readChunkAt(r.f, footerOff, size-trailerSize)
+	if err != nil || typ != chunkFooter || next != size-trailerSize {
+		return ErrCorrupt
+	}
+	tracks, _, entries, err := decodeFooter(payload)
+	if err != nil {
+		return err
+	}
+	for _, tr := range tracks {
+		r.tracks[tr.ID] = tr
+	}
+	for _, e := range entries {
+		r.idx.add(e.track, e.pts, e.off)
+	}
+	r.committed.Store(footerOff)
+	return nil
+}
+
+// Tracks returns all tracks ordered by ID.
+func (r *Reader) Tracks() []TrackInfo {
+	var out []TrackInfo
+	if r.w != nil {
+		r.w.mu.Lock()
+		for _, ts := range r.w.tracks {
+			out = append(out, ts.info)
+		}
+		r.w.mu.Unlock()
+	} else {
+		for _, info := range r.tracks {
+			out = append(out, info)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
+// FilePrivate returns the immutable file-level private data.
+func (r *Reader) FilePrivate() []byte {
+	if r.w != nil {
+		return r.w.private
+	}
+	return r.private
+}
+
+// Tags returns the latest session tags snapshot.
+func (r *Reader) Tags() map[string][]byte {
+	if r.w != nil {
+		return r.w.tagsSnapshot()
+	}
+	out := make(map[string][]byte, len(r.tags))
+	for k, v := range r.tags {
+		out[k] = v
+	}
+	return out
+}
+
+// StartTime decodes the TagStartTime tag if present.
+func (r *Reader) StartTime() (time.Time, bool) {
+	v, ok := r.Tags()[TagStartTime]
+	if !ok || len(v) != 8 {
+		return time.Time{}, false
+	}
+	return time.Unix(0, int64(binary.LittleEndian.Uint64(v))), true
+}
+
+func (r *Reader) hasTrack(id TrackID) bool {
+	if r.w != nil {
+		r.w.mu.Lock()
+		defer r.w.mu.Unlock()
+		_, ok := r.w.tracks[id]
+		return ok
+	}
+	_, ok := r.tracks[id]
+	return ok
+}
+
+func (r *Reader) trackIDs() []TrackID {
+	tracks := r.Tracks()
+	ids := make([]TrackID, len(tracks))
+	for i, tr := range tracks {
+		ids[i] = tr.ID
+	}
+	return ids
+}
+
+// Close closes the reader's file handle.
+func (r *Reader) Close() error {
+	return r.f.Close()
+}
