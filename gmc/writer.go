@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"os"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -288,6 +289,42 @@ func (w *Writer) Close() error {
 	defer w.mu.Unlock()
 	if w.closed {
 		return ErrClosed
+	}
+	w.closed = true
+	w.cond.Broadcast()
+	return w.f.Close()
+}
+
+// Finalize writes the consolidated footer and trailer, syncs, and closes the
+// file. The footer is a convenience cache: the file is fully readable through
+// the scan path even without it.
+func (w *Writer) Finalize() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed {
+		return ErrClosed
+	}
+	ids := make([]TrackID, 0, len(w.tracks))
+	for id := range w.tracks {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	tracks := make([]TrackInfo, 0, len(ids))
+	sums := make([]trackSummary, 0, len(ids))
+	for _, id := range ids {
+		ts := w.tracks[id]
+		tracks = append(tracks, ts.info)
+		sums = append(sums, trackSummary{track: id, firstPTS: ts.firstPTS, lastPTS: ts.lastPTS, frames: ts.frames})
+	}
+	footerOff := w.committed.Load()
+	if err := w.appendChunkLocked(chunkFooter, encodeFooter(tracks, sums, w.idx.dump())); err != nil {
+		return err
+	}
+	if _, err := w.f.WriteAt(encodeTrailer(footerOff), w.committed.Load()); err != nil {
+		return err
+	}
+	if err := w.f.Sync(); err != nil {
+		return err
 	}
 	w.closed = true
 	w.cond.Broadcast()
