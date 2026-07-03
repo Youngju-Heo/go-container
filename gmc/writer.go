@@ -283,7 +283,7 @@ func (w *Writer) tagsSnapshot() map[string][]byte {
 	defer w.mu.Unlock()
 	out := make(map[string][]byte, len(w.tags))
 	for k, v := range w.tags {
-		out[k] = v
+		out[k] = append([]byte(nil), v...)
 	}
 	return out
 }

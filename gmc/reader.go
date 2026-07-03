@@ -175,7 +175,7 @@ func (r *Reader) Tags() map[string][]byte {
 	}
 	out := make(map[string][]byte, len(r.tags))
 	for k, v := range r.tags {
-		out[k] = v
+		out[k] = append([]byte(nil), v...)
 	}
 	return out
 }

@@ -60,6 +60,28 @@ func TestSetStartTime(t *testing.T) {
 	}
 }
 
+// TestTagsSnapshotIsolation pins that mutating a slice returned by
+// tagsSnapshot cannot corrupt the writer's in-memory tag or leak into a
+// later persisted value.
+func TestTagsSnapshotIsolation(t *testing.T) {
+	w, path := newTestWriter(t, CreateOptions{})
+	defer w.Close()
+
+	if err := w.SetTag(TagLocation, []byte("seoul")); err != nil {
+		t.Fatal(err)
+	}
+	snap := w.tagsSnapshot()
+	snap[TagLocation][0] = 'X'
+
+	if err := w.SetTag("camera.id", []byte("cam-03")); err != nil {
+		t.Fatal(err)
+	}
+	got := readTagsArea(t, path, w)
+	if !bytes.Equal(got[TagLocation], []byte("seoul")) {
+		t.Fatalf("tags = %v, want location unchanged by snapshot mutation", got)
+	}
+}
+
 func TestSetTagTooLarge(t *testing.T) {
 	w, _ := newTestWriter(t, CreateOptions{TagsAreaSize: 256}) // slot = 128 bytes
 	defer w.Close()
