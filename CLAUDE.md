@@ -67,10 +67,10 @@
 - 기획/계획 작성시 반드시 작성된 내용을 문서(markdown 파일)로 저장하라
 - 기획 작성 시 superpowers/brainstorming 스킬을 사용
   - 저장 경로·명명규칙 `docs/feature/yyyy-mm-dd-{day-sequence}-{feature-name}-design.md`
-  - (여기서 `{day-sequence}`는 그날 순번 2자리, `01`부터)
+  - `{day-sequence}`는 그날 순번 2자리, `01`부터
 - 개발계획 작성 시 superpowers/writing-plans 스킬을 사용
   - 저장 경로·명명규칙은 `docs/feature/yyyy-mm-dd-{day-sequence}-{feature-name}-plan.md`
-  - (여기서 `{day-sequence}`는, 해당 디자인과 동일한 순번)
+  - `{day-sequence}`는, 해당 디자인과 동일한 순번
 - 작업 단계별로 git에 커밋하여 이력을 저장하라
 - 모든 문서와 커밋은 반드시 한국어로 작성하라.
 - 코드 내부의 로그, 에러 메세지 등은 가능한 영어식 표현을 사용하라.
