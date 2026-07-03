@@ -192,6 +192,31 @@ func (w *Writer) WriteFrame(id TrackID, fr Frame) error {
 		w.idx.add(id, fr.PTS, off)
 		w.pending = append(w.pending, cpEntry{id, fr.PTS, off})
 	}
+	return w.maybeCheckpointLocked()
+}
+
+// maybeCheckpointLocked writes an IndexCheckpoint chunk when the byte or time
+// threshold since the last checkpoint has been reached. Callers hold w.mu.
+func (w *Writer) maybeCheckpointLocked() error {
+	if w.committed.Load()-w.lastCPEnd < w.cpBytes && time.Since(w.lastCPTime) < w.cpInterval {
+		return nil
+	}
+	w.lastCPTime = time.Now()
+	w.lastCPEnd = w.committed.Load()
+	for _, ts := range w.tracks {
+		ts.indexedThisCP = false
+	}
+	if len(w.pending) == 0 {
+		return nil
+	}
+	off := w.committed.Load()
+	payload := encodeCheckpoint(w.prevCPOff, w.pending)
+	if err := w.appendChunkLocked(chunkCheckpoint, payload); err != nil {
+		return err
+	}
+	w.prevCPOff = off
+	w.pending = w.pending[:0]
+	w.lastCPEnd = w.committed.Load()
 	return nil
 }
 
