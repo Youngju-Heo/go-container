@@ -209,6 +209,20 @@ func (r *Reader) trackIDs() []TrackID {
 	return ids
 }
 
+// SeekPTS positions an iterator at the last sync point at or before pts on
+// the given track. The iterator yields frames from the sync point onward, so
+// callers receive the decode warm-up frames before the target pts.
+func (r *Reader) SeekPTS(id TrackID, pts uint64) (*Iterator, error) {
+	if !r.hasTrack(id) {
+		return nil, ErrUnknownTrack
+	}
+	off, ok := r.idx.seek(id, pts)
+	if !ok {
+		off = r.streamStart
+	}
+	return &Iterator{r: r, off: off, filter: map[TrackID]bool{id: true}}, nil
+}
+
 // Close closes the reader's file handle.
 func (r *Reader) Close() error {
 	return r.f.Close()

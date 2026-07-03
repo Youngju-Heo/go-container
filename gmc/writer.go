@@ -261,6 +261,22 @@ func (w *Writer) SetStartTime(t time.Time) error {
 	return w.SetTag(TagStartTime, v[:])
 }
 
+// NewReader returns a reader that shares this writer's in-memory index and
+// committed size, over its own read-only file handle.
+func (w *Writer) NewReader() (*Reader, error) {
+	f, err := os.Open(w.path)
+	if err != nil {
+		return nil, err
+	}
+	return &Reader{
+		f:           f,
+		w:           w,
+		idx:         w.idx,
+		committed:   &w.committed,
+		streamStart: w.streamStart,
+	}, nil
+}
+
 // tagsSnapshot returns a copy of the current tags map.
 func (w *Writer) tagsSnapshot() map[string][]byte {
 	w.mu.Lock()
