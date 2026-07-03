@@ -10,7 +10,7 @@
 
 ## 전역 제약
 
-- 모듈 경로: `github.com/youngjuheo/media-container`, 패키지 디렉터리: `gmc/` (모든 소스·테스트가 `package gmc` — white-box 테스트 허용)
+- 모듈 경로: `github.com/Youngju-Heo/go-container`, 패키지 디렉터리: `gmc/` (임포트 경로 `github.com/Youngju-Heo/go-container/gmc`, 모든 소스·테스트가 `package gmc` — white-box 테스트 허용)
 - 바이트 오더 리틀 엔디언, CRC는 CRC-32C(`crc32.MakeTable(crc32.Castagnoli)`) — 설계 문서 §3
 - payloadLen 상한 256 MiB, 트랙 내 pts 단조 비감소 강제, 미지 청크 타입 skip — 설계 문서 §3.4·§3.5
 - 코드 내 로그·에러 메시지·주석은 영어, 커밋 메시지는 한국어
@@ -54,7 +54,7 @@ gmc/
 - [ ] **Step 1: 모듈 초기화**
 
 ```powershell
-go mod init github.com/youngjuheo/media-container
+go mod init github.com/Youngju-Heo/go-container
 New-Item -ItemType Directory -Force gmc
 ```
 
