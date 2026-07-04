@@ -111,6 +111,16 @@ func Export(gmcPath, mkvPath string, opts ExportOptions) (*Result, error) {
 		return nil, err
 	}
 
+	// All tracks skipped: ReadInterleaved treats an empty track list as "all
+	// tracks", which would emit blocks for tracks absent from the header.
+	// Finalize a headers-only, zero-frame file instead.
+	if len(maps) == 0 {
+		if err := m.Finalize(0); err != nil {
+			return nil, err
+		}
+		return res, nil
+	}
+
 	ids := make([]gmc.TrackID, len(maps))
 	byID := map[gmc.TrackID]trackMap{}
 	for i, tm := range maps {

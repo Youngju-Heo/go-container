@@ -129,6 +129,36 @@ func TestExportFull(t *testing.T) {
 	}
 }
 
+func TestExportAllTracksSkipped(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "skip.gmc")
+	w, err := gmc.Create(src, gmc.CreateOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, _ := w.AddTrack(gmc.TrackInfo{
+		Kind: gmc.KindVideo, Codec: "V_VP9",
+		TimebaseNum: 1, TimebaseDen: 1000,
+	})
+	if err := w.WriteFrame(id, gmc.Frame{PTS: 0, Keyframe: true, Data: []byte("x")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Finalize(); err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(t.TempDir(), "skip.mkv")
+	res, err := Export(src, dst, ExportOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Tracks != 0 || res.Frames != 0 || len(res.SkippedTracks) != 1 {
+		t.Fatalf("result = %+v", res)
+	}
+	d, pkts := demuxAll(t, dst)
+	if len(d.Tracks()) != 0 || len(pkts) != 0 {
+		t.Fatalf("tracks = %d, packets = %d", len(d.Tracks()), len(pkts))
+	}
+}
+
 func TestExportRange(t *testing.T) {
 	src := buildTestGMC(t)
 	dst := filepath.Join(t.TempDir(), "range.mkv")
