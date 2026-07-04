@@ -40,7 +40,8 @@ type Demuxer struct {
 	segEnd       int64 // exclusive end of segment (file size for unknown-size)
 	clusterStart int64 // offset of the first cluster element
 
-	// cluster walk state (packet queue field added in task 5)
+	// cluster walk state
+	queue      []Packet
 	clusterTS  uint64
 	inCluster  bool
 	clusterEnd int64
@@ -302,6 +303,256 @@ func (d *Demuxer) parseTags(body []byte) {
 			}
 		}
 	}
+}
+
+// Packet is one demuxed frame. Timestamp and Duration are absolute, in
+// TimestampScale units.
+type Packet struct {
+	Track     uint64
+	Timestamp int64
+	Keyframe  bool
+	Duration  int64 // 0 unknown
+	Data      []byte
+}
+
+// defaultDurTS returns a track's DefaultDuration converted to TimestampScale
+// units (0 when unknown).
+func (d *Demuxer) defaultDurTS(track uint64) int64 {
+	for _, te := range d.tracks {
+		if te.Number == track && te.DefaultDuration > 0 {
+			return int64(te.DefaultDuration / d.info.TimestampScale)
+		}
+	}
+	return 0
+}
+
+// ReadPacket returns the next frame in storage order, io.EOF at the end.
+func (d *Demuxer) ReadPacket() (*Packet, error) {
+	for {
+		if len(d.queue) > 0 {
+			p := d.queue[0]
+			d.queue = d.queue[1:]
+			return &p, nil
+		}
+		if d.clusterStart < 0 {
+			return nil, io.EOF
+		}
+		if err := d.nextBlock(); err != nil {
+			return nil, err
+		}
+	}
+}
+
+// nextBlock advances to the next block-bearing element, filling d.queue.
+func (d *Demuxer) nextBlock() error {
+	for {
+		if d.inCluster && d.er.pos() >= d.clusterEnd {
+			d.inCluster = false
+		}
+		if !d.inCluster {
+			// walk top-level until the next cluster (skip Cues/Tags/... but
+			// still collect Tags appearing after clusters)
+			for {
+				if d.er.pos() >= d.segEnd {
+					return io.EOF
+				}
+				id, sz, unknown, err := d.er.readElement()
+				if err == io.EOF {
+					return io.EOF
+				}
+				if err != nil {
+					return err
+				}
+				if id == idCluster {
+					d.clusterTS = 0
+					d.inCluster = true
+					d.clusterEnd = d.clusterEndFrom(sz, unknown)
+					break
+				}
+				if unknown {
+					return errMalformed
+				}
+				body, err := d.er.readBytes(sz)
+				if err != nil {
+					return err
+				}
+				if id == idTags {
+					d.parseTags(body)
+				}
+			}
+		}
+		id, sz, unknown, err := d.er.readElement()
+		if err == io.EOF {
+			return io.EOF
+		}
+		if err != nil {
+			return err
+		}
+		if id == idCluster {
+			// a new cluster begins here (also ends an unknown-size cluster);
+			// do NOT read its body — descend into its scope instead
+			d.clusterTS = 0
+			d.clusterEnd = d.clusterEndFrom(sz, unknown)
+			continue
+		}
+		if unknown {
+			return errMalformed
+		}
+		body, err := d.er.readBytes(sz)
+		if err != nil {
+			return err
+		}
+		switch id {
+		case idTimestamp:
+			d.clusterTS = parseUint(body)
+		case idSimpleBlock:
+			if err := d.parseBlock(body, true, 0); err != nil {
+				return err
+			}
+			if len(d.queue) > 0 {
+				return nil
+			}
+		case idBlockGroup:
+			if err := d.parseBlockGroup(body); err != nil {
+				return err
+			}
+			if len(d.queue) > 0 {
+				return nil
+			}
+		}
+	}
+}
+
+func (d *Demuxer) parseBlockGroup(body []byte) error {
+	er := newEBMLReader(bytesReaderAt(body), int64(len(body)))
+	var blk []byte
+	var duration int64
+	hasRef := false
+	for {
+		id, sz, _, err := er.readElement()
+		if err != nil {
+			break
+		}
+		b, err := er.readBytes(sz)
+		if err != nil {
+			return err
+		}
+		switch id {
+		case idBlock:
+			blk = b
+		case idBlockDur:
+			duration = int64(parseUint(b))
+		case idRefBlock:
+			hasRef = true
+		}
+	}
+	if blk == nil {
+		return errMalformed
+	}
+	keyframe := !hasRef
+	return d.parseBlockPayload(blk, keyframe, false, duration)
+}
+
+// parseBlock handles a SimpleBlock (keyframe from flags bit 0x80).
+func (d *Demuxer) parseBlock(body []byte, simple bool, duration int64) error {
+	return d.parseBlockPayload(body, false, simple, duration)
+}
+
+// parseBlockPayload decodes track/timestamp/flags and de-laces frames into
+// d.queue. For SimpleBlocks (simple=true) keyframe comes from flags 0x80;
+// otherwise the caller passes it via kf.
+func (d *Demuxer) parseBlockPayload(body []byte, kf, simple bool, duration int64) error {
+	track, n := readVintAt(body)
+	if n == 0 || len(body) < n+3 {
+		return errMalformed
+	}
+	rel := int16(uint16(body[n])<<8 | uint16(body[n+1]))
+	flags := body[n+2]
+	if simple {
+		kf = flags&0x80 != 0
+	}
+	ts := int64(d.clusterTS) + int64(rel)
+	rest := body[n+3:]
+
+	lacing := (flags >> 1) & 0x03
+	if lacing == 0 {
+		d.queue = append(d.queue, Packet{Track: track, Timestamp: ts, Keyframe: kf, Duration: duration, Data: append([]byte(nil), rest...)})
+		return nil
+	}
+	if len(rest) < 1 {
+		return errMalformed
+	}
+	count := int(rest[0]) + 1
+	rest = rest[1:]
+	sizes := make([]int, count)
+	switch lacing {
+	case 1: // Xiph
+		for i := 0; i < count-1; i++ {
+			for {
+				if len(rest) == 0 {
+					return errMalformed
+				}
+				v := int(rest[0])
+				rest = rest[1:]
+				sizes[i] += v
+				if v != 255 {
+					break
+				}
+			}
+		}
+	case 2: // fixed
+		if len(rest)%count != 0 {
+			return errMalformed
+		}
+		for i := range sizes {
+			sizes[i] = len(rest) / count
+		}
+	case 3: // EBML
+		v, vn := readVintAt(rest)
+		if vn == 0 {
+			return errMalformed
+		}
+		rest = rest[vn:]
+		sizes[0] = int(v)
+		for i := 1; i < count-1; i++ {
+			dlt, dn := readSignedVintAt(rest)
+			if dn == 0 {
+				return errMalformed
+			}
+			rest = rest[dn:]
+			sizes[i] = sizes[i-1] + int(dlt)
+			if sizes[i] < 0 {
+				return errMalformed
+			}
+		}
+	}
+	// last frame (Xiph/EBML): remainder
+	if lacing != 2 {
+		used := 0
+		for i := 0; i < count-1; i++ {
+			used += sizes[i]
+		}
+		if used > len(rest) {
+			return errMalformed
+		}
+		sizes[count-1] = len(rest) - used
+	}
+	step := d.defaultDurTS(track)
+	off := 0
+	for i := 0; i < count; i++ {
+		if off+sizes[i] > len(rest) {
+			return errMalformed
+		}
+		d.queue = append(d.queue, Packet{
+			Track:     track,
+			Timestamp: ts + int64(i)*step,
+			Keyframe:  kf,
+			Duration:  duration,
+			Data:      append([]byte(nil), rest[off:off+sizes[i]]...),
+		})
+		off += sizes[i]
+	}
+	return nil
 }
 
 func (d *Demuxer) Info() FileInfo          { return d.info }
