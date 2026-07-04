@@ -22,6 +22,7 @@ type Reader struct {
 	private []byte
 	tags    map[string][]byte
 	tracks  map[TrackID]TrackInfo
+	maxPTS  map[TrackID]uint64 // per-track max committed pts (non-live readers)
 }
 
 // Open opens an existing GMC file. A valid trailer loads everything from the
@@ -64,6 +65,7 @@ func Open(path string) (*Reader, error) {
 		private:     hdr.private,
 		tags:        tags,
 		tracks:      map[TrackID]TrackInfo{},
+		maxPTS:      map[TrackID]uint64{},
 	}
 	if err := r.loadFooter(size); err != nil {
 		r.scan(size)
@@ -97,8 +99,13 @@ func (r *Reader) scan(size int64) {
 			}
 			tail = tail[:0] // everything before this checkpoint is covered
 		case chunkData:
-			if h, derr := decodeDataHeader(payload); derr == nil && h.flags&flagKeyframe != 0 {
-				tail = append(tail, cpEntry{h.id, h.pts, off})
+			if h, derr := decodeDataHeader(payload); derr == nil {
+				if v, ok := r.maxPTS[h.id]; !ok || h.pts > v {
+					r.maxPTS[h.id] = h.pts
+				}
+				if h.flags&flagKeyframe != 0 {
+					tail = append(tail, cpEntry{h.id, h.pts, off})
+				}
 			}
 		default:
 			// unknown chunk type: skip for forward compatibility
@@ -128,12 +135,17 @@ func (r *Reader) loadFooter(size int64) error {
 	if err != nil || typ != chunkFooter || next != size-trailerSize {
 		return ErrCorrupt
 	}
-	tracks, _, entries, err := decodeFooter(payload)
+	tracks, sums, entries, err := decodeFooter(payload)
 	if err != nil {
 		return err
 	}
 	for _, tr := range tracks {
 		r.tracks[tr.ID] = tr
+	}
+	for _, s := range sums {
+		if s.frames > 0 {
+			r.maxPTS[s.track] = s.lastPTS // stores maxPTS since task 2
+		}
 	}
 	for _, e := range entries {
 		r.idx.add(e.track, e.pts, e.off)
