@@ -10,9 +10,13 @@ import (
 	"time"
 )
 
-// Frame is one media frame / sample / metadata event.
+// Frame is one media frame / sample / metadata event. Frames are stored in
+// decode order; PTS is the presentation timestamp. DTS (decode timestamp) is
+// optional and stored only when HasDTS is set.
 type Frame struct {
 	PTS      uint64
+	DTS      uint64 // valid only when HasDTS
+	HasDTS   bool
 	Keyframe bool
 	Data     []byte
 }
@@ -178,7 +182,10 @@ func (w *Writer) WriteFrame(id TrackID, fr Frame) error {
 	if fr.Keyframe {
 		flags |= flagKeyframe
 	}
-	w.scratch = encodeDataPayload(w.scratch[:0], id, flags, fr.PTS, fr.Data)
+	if fr.HasDTS {
+		flags |= flagHasDTS
+	}
+	w.scratch = encodeDataPayload(w.scratch[:0], id, flags, fr.PTS, fr.DTS, fr.Data)
 	off := w.committed.Load()
 	if err := w.appendChunkLocked(chunkData, w.scratch); err != nil {
 		return err

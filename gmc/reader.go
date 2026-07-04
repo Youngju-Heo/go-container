@@ -97,8 +97,8 @@ func (r *Reader) scan(size int64) {
 			}
 			tail = tail[:0] // everything before this checkpoint is covered
 		case chunkData:
-			if id, flags, pts, derr := decodeDataHeader(payload); derr == nil && flags&flagKeyframe != 0 {
-				tail = append(tail, cpEntry{id, pts, off})
+			if h, derr := decodeDataHeader(payload); derr == nil && h.flags&flagKeyframe != 0 {
+				tail = append(tail, cpEntry{h.id, h.pts, off})
 			}
 		default:
 			// unknown chunk type: skip for forward compatibility
