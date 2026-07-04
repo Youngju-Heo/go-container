@@ -212,6 +212,59 @@ func (r *Reader) hasTrack(id TrackID) bool {
 	return ok
 }
 
+// trackInfo returns the TrackInfo for id from the live writer or the opened
+// snapshot.
+func (r *Reader) trackInfo(id TrackID) (TrackInfo, bool) {
+	if r.w != nil {
+		r.w.mu.Lock()
+		defer r.w.mu.Unlock()
+		ts, ok := r.w.tracks[id]
+		if !ok {
+			return TrackInfo{}, false
+		}
+		return ts.info, true
+	}
+	info, ok := r.tracks[id]
+	return info, ok
+}
+
+// LastPTS returns the highest committed pts of the track. For live readers it
+// reflects exactly the frames written so far; for opened files it comes from
+// the footer summary or the recovery scan. ok is false when the track is
+// unknown or has no frames.
+func (r *Reader) LastPTS(id TrackID) (uint64, bool) {
+	if r.w != nil {
+		r.w.mu.Lock()
+		defer r.w.mu.Unlock()
+		ts, ok := r.w.tracks[id]
+		if !ok || !ts.hasLast {
+			return 0, false
+		}
+		return ts.maxPTS, true
+	}
+	v, ok := r.maxPTS[id]
+	return v, ok
+}
+
+// LastTime returns the absolute wall-clock time of LastPTS:
+// StartTime + LastPTS×timebase. ok is false without a start time, an unknown
+// track, or an empty track.
+func (r *Reader) LastTime(id TrackID) (time.Time, bool) {
+	start, ok := r.StartTime()
+	if !ok {
+		return time.Time{}, false
+	}
+	pts, ok := r.LastPTS(id)
+	if !ok {
+		return time.Time{}, false
+	}
+	info, ok := r.trackInfo(id)
+	if !ok {
+		return time.Time{}, false
+	}
+	return start.Add(time.Duration(ptsToNano(pts, info))), true
+}
+
 func (r *Reader) trackIDs() []TrackID {
 	tracks := r.Tracks()
 	ids := make([]TrackID, len(tracks))
