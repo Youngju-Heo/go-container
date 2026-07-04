@@ -148,10 +148,11 @@ func (er *ebmlReader) peek(n int) ([]byte, error) {
 		n = int(er.size - er.cur)
 	}
 	b := make([]byte, n)
-	if _, err := er.r.ReadAt(b, er.cur); err != nil && err != io.EOF {
+	rn, err := er.r.ReadAt(b, er.cur)
+	if err != nil && err != io.EOF {
 		return nil, err
 	}
-	return b, nil
+	return b[:rn], nil
 }
 
 // readElement reads the next element header. unknown is true for

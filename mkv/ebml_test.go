@@ -91,3 +91,15 @@ func TestUnknownSizeAndBounds(t *testing.T) {
 		t.Fatalf("oversize: err = %v", err)
 	}
 }
+
+func TestTruncatedSourcePeek(t *testing.T) {
+	// Valid element whose size vint spans 2 bytes (payload of 256 bytes).
+	buf := appendElement(nil, idCodecPrivate, make([]byte, 256))
+	// Underlying data truncated mid-header (id + first size byte only),
+	// while the declared size claims the full element is present.
+	// peek must not zero-pad the short read into a "valid" header.
+	er := newEBMLReader(bytes.NewReader(buf[:3]), int64(len(buf)))
+	if _, _, _, err := er.readElement(); err != errMalformed && err != io.EOF {
+		t.Fatalf("truncated: err = %v, want errMalformed or io.EOF", err)
+	}
+}
