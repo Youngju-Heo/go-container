@@ -224,9 +224,13 @@ func Export(gmcPath, mkvPath string, opts ExportOptions) (*Result, error)
 
 ### 3.4 구간 변환 의미론
 
-- **From (시작)**: 선택된 각 트랙의 "From 이하 마지막 sync point" 중 **최소
-  오프셋**부터 포함 — GMC `ReadInterleaved`/코어 v1.1 `SeekTime` 의미론 재사용.
-  결과물은 요청보다 최대 GOP 하나만큼 앞에서 시작하며 모든 프레임이 디코드 가능.
+- **From (시작)**:
+  - 영상 트랙: "From 이하 마지막 sync point(키프레임)"로 스냅 — 결과물이
+    요청보다 최대 GOP 하나만큼 앞에서 시작하며 모든 프레임이 디코드 가능.
+  - 오디오·텍스트 트랙: 정확히 `pts ≥ From` (To 규칙과 대칭, ffmpeg/mkvmerge
+    관례). 모든 프레임이 독립 디코딩 가능하므로 스냅이 불필요하고, GMC의
+    오디오 인덱스는 샘플링되므로 인덱스 기반 스냅은 시작점을 임의로 멀리
+    당길 수 있어 채택하지 않는다.
 - **To (끝)**:
   - 영상(재정렬 가능) 트랙: **GOP 단위** — "pts ≥ To인 첫 키프레임" 직전까지
     포함. 디코드 순서상 참조는 항상 뒤→앞이므로, 이 규칙이 잘린 꼬리에서
