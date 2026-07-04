@@ -430,8 +430,11 @@ func (d *Demuxer) parseBlockGroup(body []byte) error {
 	hasRef := false
 	for {
 		id, sz, _, err := er.readElement()
-		if err != nil {
+		if err == io.EOF {
 			break
+		}
+		if err != nil {
+			return err
 		}
 		b, err := er.readBytes(sz)
 		if err != nil {

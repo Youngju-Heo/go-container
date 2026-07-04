@@ -2,6 +2,7 @@ package mkv
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"testing"
 )
@@ -89,5 +90,34 @@ func TestReadPacketBlocksAndLacing(t *testing.T) {
 	sub := pkts[5]
 	if sub.Track != 3 || sub.Timestamp != 100 || !sub.Keyframe || sub.Duration != 1500 || string(sub.Data) != "subtitle-text" {
 		t.Fatalf("subtitle = %+v", sub)
+	}
+}
+
+func TestReadPacketBlockGroupCorruptElement(t *testing.T) {
+	// BlockGroup body: valid Block, then a corrupt element whose declared
+	// size exceeds the remaining body. This must surface as errMalformed,
+	// not be silently swallowed as end-of-body.
+	var blk []byte
+	blk = appendVintSize(blk, 3)
+	blk = append(blk, 0, 0, 0x00)
+	blk = append(blk, []byte("subtitle-text")...)
+	var bg []byte
+	bg = appendElement(bg, idBlock, blk)
+	bg = appendVintID(bg, idBlockDur)
+	bg = appendVintSize(bg, 999) // declared size overruns the body: corrupt
+	var c []byte
+	c = appendUintElement(c, idTimestamp, 0)
+	c = appendElement(c, idBlockGroup, bg)
+	var clusters []byte
+	clusters = appendElement(clusters, idCluster, c)
+	data := buildTestMKV(t, clusters)
+
+	d, err := NewDemuxer(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := d.ReadPacket()
+	if !errors.Is(err, errMalformed) {
+		t.Fatalf("ReadPacket = (%+v, %v), want errMalformed", p, err)
 	}
 }
