@@ -45,9 +45,15 @@ func buildTestMKV(t *testing.T, clusters []byte) []byte {
 	te2 = appendUintElement(te2, idDefaultDuration, 20000000) // 20ms in ns
 	te2 = appendElement(te2, idAudio, audio)
 
+	var te3 []byte
+	te3 = appendUintElement(te3, idTrackNumber, 3)
+	te3 = appendUintElement(te3, idTrackType, trackTypeSubtitle)
+	te3 = appendStringElement(te3, idCodecID, "S_TEXT/UTF8")
+
 	var tracks []byte
 	tracks = appendElement(tracks, idTrackEntry, te1)
 	tracks = appendElement(tracks, idTrackEntry, te2)
+	tracks = appendElement(tracks, idTrackEntry, te3)
 
 	var st []byte
 	st = appendStringElement(st, idTagName, "TITLE")
@@ -80,7 +86,7 @@ func TestDemuxerHeaderInfoTracks(t *testing.T) {
 		t.Fatalf("info = %+v", d.Info())
 	}
 	trs := d.Tracks()
-	if len(trs) != 2 {
+	if len(trs) != 3 {
 		t.Fatalf("tracks = %d", len(trs))
 	}
 	v := trs[0]
@@ -91,6 +97,10 @@ func TestDemuxerHeaderInfoTracks(t *testing.T) {
 	a := trs[1]
 	if a.Number != 2 || a.SamplingFrequency != 48000 || a.Channels != 2 || a.DefaultDuration != 20000000 {
 		t.Fatalf("audio = %+v", a)
+	}
+	s := trs[2]
+	if s.Number != 3 || s.Type != trackTypeSubtitle || s.CodecID != "S_TEXT/UTF8" {
+		t.Fatalf("subtitle = %+v", s)
 	}
 	if d.Tags()["TITLE"] != "demo" {
 		t.Fatalf("tags = %v", d.Tags())
