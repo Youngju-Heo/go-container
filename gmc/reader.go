@@ -23,6 +23,8 @@ type Reader struct {
 	tags    map[string][]byte
 	tracks  map[TrackID]TrackInfo
 	maxPTS  map[TrackID]uint64 // per-track max committed pts (non-live readers)
+
+	finalized bool
 }
 
 // Open opens an existing GMC file. A valid trailer loads everything from the
@@ -69,6 +71,8 @@ func Open(path string) (*Reader, error) {
 	}
 	if err := r.loadFooter(size); err != nil {
 		r.scan(size)
+	} else {
+		r.finalized = true
 	}
 	return r, nil
 }
@@ -351,6 +355,12 @@ func (r *Reader) SeekTime(t time.Time, tracks ...TrackID) (*Iterator, error) {
 		}
 	}
 	return &Iterator{r: r, off: startOff, filter: filter}, nil
+}
+
+// Finalized reports whether the file was properly closed with a footer and
+// trailer. Live readers always report false (the file is still being written).
+func (r *Reader) Finalized() bool {
+	return r.finalized
 }
 
 // Close closes the reader's file handle.
