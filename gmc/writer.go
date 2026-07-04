@@ -32,8 +32,11 @@ type CreateOptions struct {
 type trackState struct {
 	info          TrackInfo
 	hasLast       bool
+	hasKey        bool
 	firstPTS      uint64
-	lastPTS       uint64
+	lastEff       uint64 // last effective decode ts (dts, or pts when absent)
+	lastKeyPTS    uint64 // last keyframe pts (Reordered-mode monotonicity)
+	maxPTS        uint64 // highest committed pts (summaries, LastPTS)
 	frames        uint64
 	indexedThisCP bool
 }
@@ -175,8 +178,18 @@ func (w *Writer) WriteFrame(id TrackID, fr Frame) error {
 	if !ok {
 		return ErrUnknownTrack
 	}
-	if ts.hasLast && fr.PTS < ts.lastPTS {
-		return ErrNonMonotonicPTS
+	eff := fr.PTS
+	if fr.HasDTS {
+		eff = fr.DTS
+	}
+	if ts.hasLast {
+		if ts.info.Reordered {
+			if fr.Keyframe && ts.hasKey && fr.PTS < ts.lastKeyPTS {
+				return ErrNonMonotonicPTS
+			}
+		} else if eff < ts.lastEff {
+			return ErrNonMonotonicPTS
+		}
 	}
 	var flags byte
 	if fr.Keyframe {
@@ -192,9 +205,16 @@ func (w *Writer) WriteFrame(id TrackID, fr Frame) error {
 	}
 	if !ts.hasLast {
 		ts.firstPTS = fr.PTS
+		ts.maxPTS = fr.PTS
+	} else if fr.PTS > ts.maxPTS {
+		ts.maxPTS = fr.PTS
 	}
 	ts.hasLast = true
-	ts.lastPTS = fr.PTS
+	ts.lastEff = eff
+	if fr.Keyframe {
+		ts.hasKey = true
+		ts.lastKeyPTS = fr.PTS
+	}
 	ts.frames++
 	if fr.Keyframe && ts.shouldIndexSync() {
 		w.idx.add(id, fr.PTS, off)
@@ -337,7 +357,7 @@ func (w *Writer) Finalize() error {
 	for _, id := range ids {
 		ts := w.tracks[id]
 		tracks = append(tracks, ts.info)
-		sums = append(sums, trackSummary{track: id, firstPTS: ts.firstPTS, lastPTS: ts.lastPTS, frames: ts.frames})
+		sums = append(sums, trackSummary{track: id, firstPTS: ts.firstPTS, lastPTS: ts.maxPTS, frames: ts.frames})
 	}
 	footerOff := w.committed.Load()
 	if err := w.appendChunkLocked(chunkFooter, encodeFooter(tracks, sums, w.idx.dump())); err != nil {
