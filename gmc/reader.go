@@ -315,6 +315,44 @@ func (r *Reader) ReadInterleaved(pts uint64, tracks ...TrackID) (*Iterator, erro
 	return &Iterator{r: r, off: start, filter: filter}, nil
 }
 
+// SeekTime positions an interleaved iterator at the absolute wall-clock time
+// t, converting it into each track's timebase (all tracks when none given).
+// Placement follows ReadInterleaved: the minimum offset among each track's
+// last sync point at or before the converted pts. Requires the
+// gmc.start_time_unix_ns tag; returns ErrNoStartTime otherwise. Times before
+// the start clamp to the beginning of the stream.
+func (r *Reader) SeekTime(t time.Time, tracks ...TrackID) (*Iterator, error) {
+	start, ok := r.StartTime()
+	if !ok {
+		return nil, ErrNoStartTime
+	}
+	var dns uint64
+	if d := t.UnixNano() - start.UnixNano(); d > 0 {
+		dns = uint64(d)
+	}
+	ids := tracks
+	if len(ids) == 0 {
+		ids = r.trackIDs()
+	}
+	filter := make(map[TrackID]bool, len(ids))
+	startOff := r.committed.Load()
+	for _, id := range ids {
+		info, ok := r.trackInfo(id)
+		if !ok {
+			return nil, ErrUnknownTrack
+		}
+		filter[id] = true
+		off, found := r.idx.seek(id, nanoToPTS(dns, info))
+		if !found {
+			off = r.streamStart
+		}
+		if off < startOff {
+			startOff = off
+		}
+	}
+	return &Iterator{r: r, off: startOff, filter: filter}, nil
+}
+
 // Close closes the reader's file handle.
 func (r *Reader) Close() error {
 	return r.f.Close()

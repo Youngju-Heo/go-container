@@ -38,4 +38,5 @@ var (
 	ErrTagsTooLarge    = errors.New("gmc: tags exceed slot capacity")
 	ErrUnknownTrack    = errors.New("gmc: unknown track")
 	ErrClosed          = errors.New("gmc: writer closed")
+	ErrNoStartTime     = errors.New("gmc: start time tag not set")
 )
