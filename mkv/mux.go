@@ -20,7 +20,6 @@ type Muxer struct {
 	seekHeadPos int64
 	durPos      int64 // where the Duration float64 payload lives
 
-	tracks     []TrackEntry
 	hasVideo   bool
 	videoTrack uint64
 
@@ -76,7 +75,6 @@ func (m *Muxer) patchSize8(pos int64) error {
 }
 
 func (m *Muxer) WriteHeader(info FileInfo, tracks []TrackEntry, tags map[string]string) error {
-	m.tracks = tracks
 	for _, te := range tracks {
 		if te.Type == trackTypeVideo && !m.hasVideo {
 			m.hasVideo = true
@@ -303,12 +301,21 @@ func (m *Muxer) Finalize(duration float64) error {
 	if _, err := m.f.WriteAt(db[:], m.durPos); err != nil {
 		return err
 	}
-	// SeekHead into the reserved Void
-	var sh []byte
-	for _, e := range []struct {
+	// SeekHead into the reserved Void. Cues is only listed when a Cues
+	// element was actually written (len(m.cues) > 0); otherwise the entry
+	// would dangle past the end of the segment (e.g. audio-only exports).
+	seekTargets := []struct {
 		id  uint32
 		pos int64
-	}{{idInfo, m.infoPos}, {idTracks, m.tracksPos}, {idCues, m.cuesPos}} {
+	}{{idInfo, m.infoPos}, {idTracks, m.tracksPos}}
+	if len(m.cues) > 0 {
+		seekTargets = append(seekTargets, struct {
+			id  uint32
+			pos int64
+		}{idCues, m.cuesPos})
+	}
+	var sh []byte
+	for _, e := range seekTargets {
 		var sk []byte
 		sk = appendElement(sk, idSeekID, appendVintID(nil, e.id))
 		sk = appendUintElement(sk, idSeekPos, uint64(e.pos))
