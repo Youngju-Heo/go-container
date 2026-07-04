@@ -91,6 +91,18 @@ start, ok := r.StartTime()
 
 Go 1.22+ (표준 라이브러리만). 테스트: `go test ./gmc/` (동시성 검증은 `-race` 지원 플랫폼에서 `go test -race ./gmc/`).
 
+## 서브패키지
+
+- `gmc/codec` — Matroska 관례를 따르는 코덱 규약 계층: CodecID 상수(H.264/HEVC/PCM/Opus/AAC/FLAC/UTF-8 텍스트), Private envelope, Annex-B 변환 헬퍼.
+- `mkv` — MKV(Matroska) import/export. 전체 또는 구간(`Range`) 변환, 순수 표준 라이브러리 EBML 구현.
+
+```go
+res, err := mkv.Import("in.mkv", "out.gmc", mkv.ImportOptions{})
+res, err = mkv.Export("out.gmc", "again.mkv", mkv.ExportOptions{
+    Range: mkv.Range{From: 10 * time.Second, To: 20 * time.Second},
+})
+```
+
 ## 라이선스
 
 Apache License 2.0 — [`LICENSE`](LICENSE) 참조.
