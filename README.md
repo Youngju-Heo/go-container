@@ -119,7 +119,20 @@ res, err = mkv.Export("out.gmc", "again.mkv", mkv.ExportOptions{
 
 ```sh
 go run ./example/mkv-info sample/video-clip.mkv
+go run ./example/gmc-stitch-mkv          # sample/의 GMC 세그먼트를 읽어 stitched.mkv 생성
 ```
+
+### 테스트 샘플 (`sample/`)
+
+| 파일 | 구성 | 용도 |
+|---|---|---|
+| `video-clip.mkv` (30s) | H.264 + FLAC + 자막 | 기본 라운드트립 |
+| `test-clip.mkv` (30s) | H.264(B-frame) + FLAC + AAC + Opus + 날짜시각 자막 | 비단조 pts·다중 오디오 검증 |
+| `test-clip-hevc.mkv` (10s) | HEVC(B-frame) + PCM | HEVC/PCM 검증 |
+| `test-clip-000~002.gmc` (각 10s) | test-clip을 GOP 경계로 분할한 GMC 세그먼트 | 스티칭 예제 입력 |
+
+지원 7개 코덱(H.264/HEVC/PCM/Opus/AAC/FLAC/UTF-8 텍스트) 전부가 위 실샘플의
+MKV↔GMC 라운드트립 테스트로 검증된다 (`go test ./mkv/ -run TestSample`).
 
 ## 라이선스
 

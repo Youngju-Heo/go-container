@@ -1,7 +1,7 @@
 # GMC 코덱 규약(gmc/codec) + MKV import/export(mkv) 설계
 
 - 작성일: 2026-07-04
-- 상태: 승인 (구현 대기)
+- 상태: 구현 완료 (2026-07-05 병합 739aa9d — 태스크 9개 전부 리뷰 승인, Opus 최종 브랜치 리뷰 통과, §4.3 샘플 확장 완료)
 - 대상: `github.com/Youngju-Heo/go-container` — 신규 패키지 `gmc/codec`, `mkv`
 - 선행: [GMC 코어 v1.1 확장](2026-07-04-01-gmc-core-v11-design.md) (Reordered 모드·DTS 확장점)
 - 관련: [GMC 포맷 설계](2026-07-03-01-gmc-container-design.md)
@@ -270,16 +270,20 @@ ffplay/VLC out.mkv                # 재생·시크·A/V 동기·자막 표시
 mkvalidator out.mkv               # (선택) Matroska 규격 준수
 ```
 
-### 4.3 샘플 확장
+### 4.3 샘플 확장 — 완료 (2026-07-05)
 
-현 샘플은 H.264+FLAC+자막만 커버. 나머지 코덱 샘플 생성 명령을 기재해 두고
-확보되는 대로 `sample/`에 추가한다 (수 초 분량):
+`sample/`에 확보된 픽스처로 §2.1의 7개 코덱 전부가 실샘플 라운드트립으로 검증된다:
 
-```
-ffmpeg -i src.mp4 -t 5 -c:v libx265 -c:a libopus  sample/clip-hevc-opus.mkv
-ffmpeg -i src.mp4 -t 5 -c:v libx264 -c:a aac      sample/clip-h264-aac.mkv
-ffmpeg -i src.mp4 -t 5 -vn -c:a pcm_s16le         sample/clip-pcm.mkv
-```
+| 파일 | 구성 | 검증 포인트 |
+|---|---|---|
+| `video-clip.mkv` (30s) | H.264 + FLAC + S_TEXT/UTF8 | 기본 3트랙 라운드트립 |
+| `test-clip.mkv` (30s) | H.264(**B-frame**) + FLAC + **AAC** + **Opus** + 날짜시각 자막 | 비단조 pts 실검증, 동종 다중 오디오 |
+| `test-clip-hevc.mkv` (10s) | **HEVC**(B-frame) + **PCM** | hvcC 통과, PCM envelope 파라미터 보존 |
+| `test-clip-000~002.gmc` (각 10s) | 위 test-clip을 GOP 경계로 분할한 GMC 세그먼트 | 스티칭 예제 입력 (각 세그먼트 키프레임 시작) |
+
+생성 명령: test-clip은 `ffmpeg -i video-clip.mkv -c:v libx264 -bf 3 …` (커밋 74931bf),
+hevc는 `-c:v libx265 -c:a pcm_s16le -t 10` (커밋 472fccc), GMC 세그먼트는 Demuxer→gmc
+Writer 직접 기록·영상은 경계 이후 첫 키프레임에서 전환 (커밋 aa1ca8e).
 
 ## 5. 대안 검토
 
@@ -290,9 +294,16 @@ ffmpeg -i src.mp4 -t 5 -vn -c:a pcm_s16le         sample/clip-pcm.mkv
 | ffmpeg CLI 위임 | 상동 + 배포 환경 요구 발생 |
 | Cues 기반 구간 import 최적화 | v1은 순차 스캔으로 충분(구간 밖 payload는 skip) — 필요 시 후속 최적화 |
 
-## 6. 다음 단계
+## 6. 다음 단계 — 완료 및 잔여 후속
 
-1. 선행: [코어 v1.1](2026-07-04-01-gmc-core-v11-design.md) 구현 완료
-2. 본 설계의 상세 개발 계획 (`2026-07-04-02-gmc-mkv-plan.md`) — gmc/codec →
-   mkv(ebml→demux→import→mux→export→구간) 순 TDD
-3. 구현 후 requesting-code-review로 브랜치 최종 리뷰
+계획(`2026-07-04-02-gmc-mkv-plan.md`) 9개 태스크 전부 구현·리뷰 완료, Opus 최종
+브랜치 리뷰 통과 후 main 병합(739aa9d). 리뷰 과정에서 수정된 실결함: EBML peek
+부분읽기 절단, BlockGroup 손상 오류 전파, Export 전 트랙 skip 손상 출력 방지,
+영상 없는 파일 SeekHead Cues 댕글링 제거.
+
+잔여 후속 (비차단):
+- `-race` 검증: amd64/linux 환경 또는 CI (이 개발 머신 windows/arm64 미지원)
+- §4.2 수동 재생 검증: VLC·mkvalidator (ffprobe 교차 확인은 샘플 제작 시 수행)
+- Opus `CodecDelay`/`SeekPreRoll` 요소 미보존 (OpusHead의 preSkip은 CodecPrivate로
+  보존 — 일반 재생 무영향, 갭리스 편집 엄밀성에서만 차이)
+- 음수 Range 입력 가드, `splitAnnexB` 다중 선행 zero 방어

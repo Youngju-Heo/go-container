@@ -1,5 +1,7 @@
 # GMC 컨테이너 구현 계획
 
+> **상태: 구현 완료** — 16개 태스크 전부 리뷰 승인 (2026-07-03, 커밋 c12988f..9d3df9c, 병합 93b190e). 체크박스는 갱신하지 않음.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **목표:** 설계 문서(`docs/feature/2026-07-03-01-gmc-container-design.md`)의 GMC 멀티미디어 컨테이너를 Go 패키지 `gmc`로 구현한다 — 쓰기 도중 읽기(라이브 테일 + 과거 시크), 크래시 복구, Tags 영역, Footer 빠른 오픈 포함.

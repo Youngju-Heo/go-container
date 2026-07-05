@@ -1,7 +1,7 @@
 # GMC 코어 v1.1 확장 설계 — DTS 확장점·Reordered 모드·엣지 조회·절대시간 시크·완결 판정
 
 - 작성일: 2026-07-04
-- 상태: 승인 (구현 대기)
+- 상태: 구현 완료 (2026-07-05 병합 739aa9d — 태스크 6개 전부 리뷰 승인, Opus 최종 브랜치 리뷰 통과)
 - 대상: `github.com/Youngju-Heo/go-container/gmc`
 - 출처: 소비자(media-recorder) 측 제안 문서 「GMC 컨테이너 추가 기능 제안」(2026-07-04)을
   검토·채택하고 보완한 결과. 원 제안의 A·B·E·D를 수용, G(중간 손상 resync)는 연기.
@@ -184,7 +184,9 @@ func (r *Reader) Finalized() bool
 | import 시 DTS 합성 | 코덱 인지 필요 — 컨테이너 순수성(리트머스 1) 위반 |
 | TrackInfo에 Reordered 직렬화 | 읽기 경로에 소비자가 없음(시크·인덱스 무변경) — YAGNI. 필요해지면 추가적 확장 가능 |
 
-## 9. 다음 단계
+## 9. 다음 단계 — 완료
 
-1. 본 설계 확정 → 상세 개발 계획(`2026-07-04-01-gmc-core-v11-plan.md`)
-2. 구현(TDD) 후, 본 확장 위에서 [코덱 규약 + MKV 변환](2026-07-04-02-gmc-mkv-design.md) 진행
+계획(`2026-07-04-01-gmc-core-v11-plan.md`) 6개 태스크 전부 구현·리뷰 완료 후
+[코덱 규약 + MKV 변환](2026-07-04-02-gmc-mkv-design.md)까지 이어서 구현, main
+병합(739aa9d). B-frame 수용은 MKV 실샘플(비단조 pts)로 실전 검증됨.
+잔여 후속: `-race` 검증(amd64/linux, 이 머신 미지원) — G(resync)는 계속 연기.
