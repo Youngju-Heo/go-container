@@ -88,7 +88,11 @@ type TrackInfo struct {
 | 기본 (Reordered=false) | 유효 디코드 ts(= DTS, 없으면 PTS)가 단조 비감소 | DTS 미사용 시 **기존 동작과 완전 동일** |
 | Reordered=true | **Keyframe 프레임의 pts만** 직전 키프레임 pts 이상 강제. 비키프레임 pts는 검사하지 않음 | 인덱스 정렬성(시크 정확성)에 필요한 최소 불변식. open-GOP leading frame 수용 |
 
-- 위반 시 에러는 기존 `ErrNonMonotonicPTS`를 재사용한다.
+- 위반 시 에러는 원인에 따라 세분화된 타입을 반환한다.
+  - 기본 모드 PTS 역행: `ErrNonMonotonicPTS` (기존과 동일)
+  - 기본 모드 DTS 역행: `ErrNonMonotonicDTS` (신규)
+  - Reordered 모드 키프레임 PTS 역행: `ErrNonMonotonicKeyframePTS` (신규)
+  - 이를 통해 호출자는 오류의 원인을 더 명확히 파악할 수 있다.
 - 가이드: 호출자가 DTS를 확보할 수 있으면 기본 모드 + `HasDTS`를 권장.
   `Reordered`는 DTS가 없는 재정렬 스트림(예: MKV import) 전용.
 - 인덱스는 지금처럼 키프레임(sync point)에만 걸린다. Reordered에서도 키프레임
