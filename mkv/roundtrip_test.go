@@ -8,7 +8,22 @@ import (
 	"time"
 )
 
-var samplePaths = []string{"../sample/video-clip.mkv", "../sample/test-clip.mkv"}
+var samplePaths = []string{"../sample/video-clip.mkv", "../sample/test-clip.mkv", "../sample/test-clip-hevc.mkv"}
+
+// sampleRanges gives each sample a range-import window sized to its own
+// duration. video-clip.mkv and test-clip.mkv are 30s+ clips and use the
+// original 10s..20s window; test-clip-hevc.mkv is only 10s long, so a
+// 10s..20s window would be empty/degenerate — use 3s..7s instead.
+var sampleRanges = map[string]Range{
+	"../sample/test-clip-hevc.mkv": {From: 3 * time.Second, To: 7 * time.Second},
+}
+
+func rangeFor(path string) Range {
+	if r, ok := sampleRanges[path]; ok {
+		return r
+	}
+	return Range{From: 10 * time.Second, To: 20 * time.Second}
+}
 
 func requireSample(t *testing.T, path string) {
 	t.Helper()
@@ -85,8 +100,11 @@ func TestSampleRoundtrip(t *testing.T) {
 				}
 			}
 
-			if filepath.Base(samplePath) == "test-clip.mkv" {
+			switch filepath.Base(samplePath) {
+			case "test-clip.mkv":
 				assertMultiCodecFixture(t, srcTracks, srcPkts)
+			case "test-clip-hevc.mkv":
+				assertHevcPcmFixture(t, srcTracks, srcPkts)
 			}
 		})
 	}
@@ -143,9 +161,45 @@ func assertMultiCodecFixture(t *testing.T, tracks []TrackEntry, pkts []flatPacke
 	}
 }
 
-// TestSampleRangeImport: a 10s..20s window of the sample must produce fewer
-// frames than the full import, and its video must start on a keyframe at or
-// before the 10s mark (keyframe snap).
+// assertHevcPcmFixture proves that test-clip-hevc.mkv exercises what it was
+// added for: an HEVC video track with real B-frame reordering (non-monotonic
+// decode-order timestamps) alongside a PCM audio track.
+func assertHevcPcmFixture(t *testing.T, tracks []TrackEntry, pkts []flatPacket) {
+	t.Helper()
+	wantCodecs := []string{"V_MPEGH/ISO/HEVC", "A_PCM/INT/LIT"}
+	if len(tracks) != len(wantCodecs) {
+		t.Fatalf("track count = %d, want %d", len(tracks), len(wantCodecs))
+	}
+	var videoNum uint64
+	for i, te := range tracks {
+		if te.CodecID != wantCodecs[i] {
+			t.Fatalf("track %d codec = %q, want %q", i, te.CodecID, wantCodecs[i])
+		}
+		if te.CodecID == "V_MPEGH/ISO/HEVC" {
+			videoNum = te.Number
+		}
+	}
+
+	var videoTS []int64
+	for _, p := range pkts {
+		if p.track == videoNum {
+			videoTS = append(videoTS, p.ts)
+		}
+	}
+	nonMonotonic := 0
+	for i := 1; i < len(videoTS); i++ {
+		if videoTS[i] < videoTS[i-1] {
+			nonMonotonic++
+		}
+	}
+	if nonMonotonic < 1 {
+		t.Fatalf("video packet timestamps are monotonic; expected B-frame reordering (nonMonotonic=%d)", nonMonotonic)
+	}
+}
+
+// TestSampleRangeImport: a range window of the sample (see rangeFor) must
+// produce fewer frames than the full import, and its video must start on a
+// keyframe at or before the window start (keyframe snap).
 func TestSampleRangeImport(t *testing.T) {
 	for _, samplePath := range samplePaths {
 		samplePath := samplePath
@@ -157,7 +211,8 @@ func TestSampleRangeImport(t *testing.T) {
 			if _, err := Import(samplePath, fullPath, ImportOptions{}); err != nil {
 				t.Fatal(err)
 			}
-			res, err := Import(samplePath, rangePath, ImportOptions{Range: Range{From: 10 * time.Second, To: 20 * time.Second}})
+			rng := rangeFor(samplePath)
+			res, err := Import(samplePath, rangePath, ImportOptions{Range: rng})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -190,7 +245,7 @@ func TestSampleRangeImport(t *testing.T) {
 					break
 				}
 			}
-			if firstVideo == nil || !firstVideo.keyframe || firstVideo.ts > 10000 {
+			if firstVideo == nil || !firstVideo.keyframe || firstVideo.ts > rng.From.Milliseconds() {
 				t.Fatalf("range start not keyframe-snapped: %+v", firstVideo)
 			}
 		})
