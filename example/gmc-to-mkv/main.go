@@ -27,7 +27,7 @@ func main() {
 	var tracks []gmc.TrackID
 	if *tracksFlag != "" {
 		for _, s := range strings.Split(*tracksFlag, ",") {
-			id, err := strconv.ParseUint(s, 10, 16)
+			id, err := strconv.ParseUint(strings.TrimSpace(s), 10, 16)
 			if err != nil {
 				log.Fatalf("parse -tracks: %v", err)
 			}

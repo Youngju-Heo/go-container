@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -156,6 +157,67 @@ func TestImportRange(t *testing.T) {
 		t.Fatalf("audio pts = %v", apts)
 	}
 	_ = res
+}
+
+func TestImportTrackSelection(t *testing.T) {
+	src := writeTestMKVFile(t)
+	dst := filepath.Join(t.TempDir(), "sel.gmc")
+	res, err := Import(src, dst, ImportOptions{Tracks: []uint64{1, 3}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Tracks != 2 || len(res.SkippedTracks) != 0 {
+		t.Fatalf("result = %+v", res)
+	}
+
+	r, err := gmc.Open(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	trs := r.Tracks()
+	if len(trs) != 2 {
+		t.Fatalf("tracks = %+v", trs)
+	}
+	if trs[0].Kind != gmc.KindVideo {
+		t.Fatalf("track 0 = %+v", trs[0])
+	}
+	if trs[1].Kind != gmc.KindData {
+		t.Fatalf("track 1 = %+v", trs[1])
+	}
+
+	it, err := r.SeekPTS(trs[0].ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var vd [][]byte
+	for it.Next() {
+		vd = append(vd, it.Frame().Data)
+	}
+	if len(vd) != 4 {
+		t.Fatalf("video frames = %d", len(vd))
+	}
+
+	it2, err := r.SeekPTS(trs[1].ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var subCount int
+	for it2.Next() {
+		subCount++
+	}
+	if subCount != 1 {
+		t.Fatalf("subtitle frames = %d", subCount)
+	}
+
+	unknownDst := filepath.Join(t.TempDir(), "unknown.gmc")
+	_, err = Import(src, unknownDst, ImportOptions{Tracks: []uint64{7}})
+	if err == nil || !strings.Contains(err.Error(), "unknown track number") {
+		t.Fatalf("err = %v", err)
+	}
+	if _, statErr := os.Stat(unknownDst); !os.IsNotExist(statErr) {
+		t.Fatalf("stray output file created: statErr=%v", statErr)
+	}
 }
 
 func TestImportSkipsUnknownCodec(t *testing.T) {

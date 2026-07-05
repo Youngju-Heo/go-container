@@ -113,7 +113,7 @@ res, err = mkv.Export("out.gmc", "again.mkv", mkv.ExportOptions{
 - `example/gmc-basic` — 생성·트랙 등록·PCM/자막 프레임 기록·Finalize·재오픈·SeekTime까지 기본 흐름 전체.
 - `example/gmc-live` — 쓰는 중 읽기: writer가 이벤트를 기록하는 동안 `Follow`로 실시간 수신.
 - `example/mkv-info` — MKV 파일의 Info/트랙/Tags/패킷 통계를 출력하는 CLI.
-- `example/mkv-to-gmc` — MKV → gmc 변환 CLI (구간 옵션 `-from`/`-to` 지원).
+- `example/mkv-to-gmc` — MKV → gmc 변환 CLI (구간 옵션 `-from`/`-to`, `-tracks` 트랙 선택 지원).
 - `example/gmc-to-mkv` — gmc → MKV 변환 CLI (구간 옵션, `-scale`, `-tracks` 트랙 선택 지원).
 - `example/gmc-stitch-mkv` — 커밋된 GMC 세그먼트 3개에서 절대창 5s..25s를 조립.
 

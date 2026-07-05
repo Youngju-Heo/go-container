@@ -5,6 +5,8 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Youngju-Heo/go-container/mkv"
@@ -13,11 +15,23 @@ import (
 func main() {
 	from := flag.String("from", "", "range start, e.g. 10s (default: beginning)")
 	to := flag.String("to", "", "range end, e.g. 20s (default: end of file)")
+	tracksFlag := flag.String("tracks", "", "comma-separated MKV track numbers to import, e.g. 1,3 (default: all)")
 	flag.Parse()
 	if flag.NArg() != 2 {
-		log.Fatal("usage: mkv-to-gmc [-from 10s] [-to 20s] <in.mkv> <out.gmc>")
+		log.Fatal("usage: mkv-to-gmc [-from 10s] [-to 20s] [-tracks 1,3] <in.mkv> <out.gmc>")
 	}
 	mkvPath, gmcPath := flag.Arg(0), flag.Arg(1)
+
+	var tracks []uint64
+	if *tracksFlag != "" {
+		for _, s := range strings.Split(*tracksFlag, ",") {
+			n, err := strconv.ParseUint(strings.TrimSpace(s), 10, 64)
+			if err != nil {
+				log.Fatalf("parse -tracks: %v", err)
+			}
+			tracks = append(tracks, n)
+		}
+	}
 
 	var rng mkv.Range
 	if *from != "" {
@@ -35,7 +49,7 @@ func main() {
 		rng.To = d
 	}
 
-	res, err := mkv.Import(mkvPath, gmcPath, mkv.ImportOptions{Range: rng})
+	res, err := mkv.Import(mkvPath, gmcPath, mkv.ImportOptions{Range: rng, Tracks: tracks})
 	if err != nil {
 		log.Fatalf("import: %v", err)
 	}

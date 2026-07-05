@@ -175,6 +175,7 @@ type Range struct{ From, To time.Duration }
 
 type ImportOptions struct {
     Range Range
+    Tracks []uint64 // 비어있으면 전체, 지정 시 해당 MKV 트랙 번호만 (미존재 번호는 오류)
 }
 
 type ExportOptions struct {

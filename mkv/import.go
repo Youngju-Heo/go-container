@@ -1,6 +1,7 @@
 package mkv
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"time"
@@ -18,6 +19,13 @@ type Range struct {
 
 type ImportOptions struct {
 	Range Range
+
+	// Tracks restricts import to the given MKV track numbers (TrackEntry.Number,
+	// what mkv-info prints as #N). nil or empty imports all tracks (default
+	// behavior). Any number not present in the source file is an error; a
+	// selected track that is otherwise unsupported still follows the normal
+	// skip semantics.
+	Tracks []uint64
 }
 
 type SkippedTrack struct {
@@ -61,6 +69,28 @@ func Import(mkvPath, gmcPath string, opts ImportOptions) (*Result, error) {
 	}
 	scale := d.Info().TimestampScale
 
+	// track selection: validate before gmc.Create so an unknown number
+	// leaves no stray output file.
+	var selected map[uint64]bool
+	if len(opts.Tracks) > 0 {
+		selected = make(map[uint64]bool, len(opts.Tracks))
+		for _, n := range opts.Tracks {
+			selected[n] = true
+		}
+		for n := range selected {
+			found := false
+			for _, te := range d.Tracks() {
+				if te.Number == n {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return nil, fmt.Errorf("mkv: unknown track number %d", n)
+			}
+		}
+	}
+
 	// range in scale units (0 = unbounded)
 	fromTS := int64(mulDiv(uint64(opts.Range.From), 1, scale))
 	toTS := int64(mulDiv(uint64(opts.Range.To), 1, scale))
@@ -70,7 +100,7 @@ func Import(mkvPath, gmcPath string, opts ImportOptions) (*Result, error) {
 	// cut exactly at From (symmetric with the To rule) — no snap needed.
 	videoTrack := map[uint64]bool{}
 	for _, te := range d.Tracks() {
-		if te.Type == trackTypeVideo {
+		if te.Type == trackTypeVideo && (selected == nil || selected[te.Number]) {
 			videoTrack[te.Number] = true
 		}
 	}
@@ -105,6 +135,9 @@ func Import(mkvPath, gmcPath string, opts ImportOptions) (*Result, error) {
 	isVideo := map[uint64]bool{}
 	isText := map[uint64]bool{}
 	for _, te := range d.Tracks() {
+		if selected != nil && !selected[te.Number] {
+			continue
+		}
 		info, ok := mapTrack(te)
 		if !ok {
 			res.SkippedTracks = append(res.SkippedTracks, SkippedTrack{Number: te.Number, CodecID: te.CodecID, Reason: "unsupported codec"})
