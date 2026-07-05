@@ -96,9 +96,9 @@ func TestWriteFrameAppendsChunks(t *testing.T) {
 	if len(chunks) != 3 || chunks[0].typ != chunkTrackInfo || chunks[1].typ != chunkData {
 		t.Fatalf("chunks = %+v", chunks)
 	}
-	id, flags, pts, err := decodeDataHeader(chunks[1].payload)
-	if err != nil || id != video || flags != flagKeyframe || pts != 0 {
-		t.Fatalf("frame0: id=%d flags=%d pts=%d err=%v", id, flags, pts, err)
+	h, err := decodeDataHeader(chunks[1].payload)
+	if err != nil || h.id != video || h.flags != flagKeyframe || h.pts != 0 {
+		t.Fatalf("frame0: h=%+v err=%v", h, err)
 	}
 	if !bytes.Equal(chunks[2].payload[dataHeaderSize:], []byte("p1")) {
 		t.Fatal("frame1 body mismatch")

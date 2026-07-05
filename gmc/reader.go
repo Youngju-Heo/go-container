@@ -22,6 +22,9 @@ type Reader struct {
 	private []byte
 	tags    map[string][]byte
 	tracks  map[TrackID]TrackInfo
+	maxPTS  map[TrackID]uint64 // per-track max committed pts (non-live readers)
+
+	finalized bool
 }
 
 // Open opens an existing GMC file. A valid trailer loads everything from the
@@ -64,9 +67,12 @@ func Open(path string) (*Reader, error) {
 		private:     hdr.private,
 		tags:        tags,
 		tracks:      map[TrackID]TrackInfo{},
+		maxPTS:      map[TrackID]uint64{},
 	}
 	if err := r.loadFooter(size); err != nil {
 		r.scan(size)
+	} else {
+		r.finalized = true
 	}
 	return r, nil
 }
@@ -97,8 +103,13 @@ func (r *Reader) scan(size int64) {
 			}
 			tail = tail[:0] // everything before this checkpoint is covered
 		case chunkData:
-			if id, flags, pts, derr := decodeDataHeader(payload); derr == nil && flags&flagKeyframe != 0 {
-				tail = append(tail, cpEntry{id, pts, off})
+			if h, derr := decodeDataHeader(payload); derr == nil {
+				if v, ok := r.maxPTS[h.id]; !ok || h.pts > v {
+					r.maxPTS[h.id] = h.pts
+				}
+				if h.flags&flagKeyframe != 0 {
+					tail = append(tail, cpEntry{h.id, h.pts, off})
+				}
 			}
 		default:
 			// unknown chunk type: skip for forward compatibility
@@ -128,12 +139,17 @@ func (r *Reader) loadFooter(size int64) error {
 	if err != nil || typ != chunkFooter || next != size-trailerSize {
 		return ErrCorrupt
 	}
-	tracks, _, entries, err := decodeFooter(payload)
+	tracks, sums, entries, err := decodeFooter(payload)
 	if err != nil {
 		return err
 	}
 	for _, tr := range tracks {
 		r.tracks[tr.ID] = tr
+	}
+	for _, s := range sums {
+		if s.frames > 0 {
+			r.maxPTS[s.track] = s.lastPTS // stores maxPTS since task 2
+		}
 	}
 	for _, e := range entries {
 		r.idx.add(e.track, e.pts, e.off)
@@ -200,6 +216,59 @@ func (r *Reader) hasTrack(id TrackID) bool {
 	return ok
 }
 
+// trackInfo returns the TrackInfo for id from the live writer or the opened
+// snapshot.
+func (r *Reader) trackInfo(id TrackID) (TrackInfo, bool) {
+	if r.w != nil {
+		r.w.mu.Lock()
+		defer r.w.mu.Unlock()
+		ts, ok := r.w.tracks[id]
+		if !ok {
+			return TrackInfo{}, false
+		}
+		return ts.info, true
+	}
+	info, ok := r.tracks[id]
+	return info, ok
+}
+
+// LastPTS returns the highest committed pts of the track. For live readers it
+// reflects exactly the frames written so far; for opened files it comes from
+// the footer summary or the recovery scan. ok is false when the track is
+// unknown or has no frames.
+func (r *Reader) LastPTS(id TrackID) (uint64, bool) {
+	if r.w != nil {
+		r.w.mu.Lock()
+		defer r.w.mu.Unlock()
+		ts, ok := r.w.tracks[id]
+		if !ok || !ts.hasLast {
+			return 0, false
+		}
+		return ts.maxPTS, true
+	}
+	v, ok := r.maxPTS[id]
+	return v, ok
+}
+
+// LastTime returns the absolute wall-clock time of LastPTS:
+// StartTime + LastPTS×timebase. ok is false without a start time, an unknown
+// track, or an empty track.
+func (r *Reader) LastTime(id TrackID) (time.Time, bool) {
+	start, ok := r.StartTime()
+	if !ok {
+		return time.Time{}, false
+	}
+	pts, ok := r.LastPTS(id)
+	if !ok {
+		return time.Time{}, false
+	}
+	info, ok := r.trackInfo(id)
+	if !ok {
+		return time.Time{}, false
+	}
+	return start.Add(time.Duration(ptsToNano(pts, info))), true
+}
+
 func (r *Reader) trackIDs() []TrackID {
 	tracks := r.Tracks()
 	ids := make([]TrackID, len(tracks))
@@ -248,6 +317,50 @@ func (r *Reader) ReadInterleaved(pts uint64, tracks ...TrackID) (*Iterator, erro
 		}
 	}
 	return &Iterator{r: r, off: start, filter: filter}, nil
+}
+
+// SeekTime positions an interleaved iterator at the absolute wall-clock time
+// t, converting it into each track's timebase (all tracks when none given).
+// Placement follows ReadInterleaved: the minimum offset among each track's
+// last sync point at or before the converted pts. Requires the
+// gmc.start_time_unix_ns tag; returns ErrNoStartTime otherwise. Times before
+// the start clamp to the beginning of the stream.
+func (r *Reader) SeekTime(t time.Time, tracks ...TrackID) (*Iterator, error) {
+	start, ok := r.StartTime()
+	if !ok {
+		return nil, ErrNoStartTime
+	}
+	var dns uint64
+	if d := t.UnixNano() - start.UnixNano(); d > 0 {
+		dns = uint64(d)
+	}
+	ids := tracks
+	if len(ids) == 0 {
+		ids = r.trackIDs()
+	}
+	filter := make(map[TrackID]bool, len(ids))
+	startOff := r.committed.Load()
+	for _, id := range ids {
+		info, ok := r.trackInfo(id)
+		if !ok {
+			return nil, ErrUnknownTrack
+		}
+		filter[id] = true
+		off, found := r.idx.seek(id, nanoToPTS(dns, info))
+		if !found {
+			off = r.streamStart
+		}
+		if off < startOff {
+			startOff = off
+		}
+	}
+	return &Iterator{r: r, off: startOff, filter: filter}, nil
+}
+
+// Finalized reports whether the file was properly closed with a footer and
+// trailer. Live readers always report false (the file is still being written).
+func (r *Reader) Finalized() bool {
+	return r.finalized
 }
 
 // Close closes the reader's file handle.

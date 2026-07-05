@@ -25,6 +25,13 @@ type TrackInfo struct {
 	TimebaseNum uint32
 	TimebaseDen uint32
 	Private     []byte
+
+	// Reordered selects the write-side validation mode for this track. It is
+	// not serialized (like ID, it is meaningless on read). When true the track
+	// carries a reordered (B-frame) stream in decode order: only sync-point
+	// (keyframe) pts monotonicity is enforced and non-keyframe pts are free.
+	// Callers that can supply DTS should prefer the default mode with HasDTS.
+	Reordered bool
 }
 
 func encodeTrackInfo(info TrackInfo) []byte {

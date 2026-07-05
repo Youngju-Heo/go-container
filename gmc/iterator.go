@@ -35,19 +35,21 @@ func (it *Iterator) Next() bool {
 		if typ != chunkData {
 			continue
 		}
-		id, flags, pts, derr := decodeDataHeader(payload)
+		h, derr := decodeDataHeader(payload)
 		if derr != nil {
 			it.err = derr
 			return false
 		}
-		if it.filter != nil && !it.filter[id] {
+		if it.filter != nil && !it.filter[h.id] {
 			continue
 		}
-		it.track = id
+		it.track = h.id
 		it.frame = Frame{
-			PTS:      pts,
-			Keyframe: flags&flagKeyframe != 0,
-			Data:     append([]byte(nil), payload[dataHeaderSize:]...),
+			PTS:      h.pts,
+			DTS:      h.dts,
+			HasDTS:   h.flags&flagHasDTS != 0,
+			Keyframe: h.flags&flagKeyframe != 0,
+			Data:     append([]byte(nil), payload[h.n:]...),
 		}
 		return true
 	}
@@ -112,17 +114,19 @@ func (r *Reader) follow(ctx context.Context, ch chan<- TrackFrame, off int64, fi
 			if typ != chunkData {
 				continue
 			}
-			id, flags, pts, derr := decodeDataHeader(payload)
+			h, derr := decodeDataHeader(payload)
 			if derr != nil {
 				return
 			}
-			if filter != nil && !filter[id] {
+			if filter != nil && !filter[h.id] {
 				continue
 			}
-			tf := TrackFrame{Track: id, Frame: Frame{
-				PTS:      pts,
-				Keyframe: flags&flagKeyframe != 0,
-				Data:     append([]byte(nil), payload[dataHeaderSize:]...),
+			tf := TrackFrame{Track: h.id, Frame: Frame{
+				PTS:      h.pts,
+				DTS:      h.dts,
+				HasDTS:   h.flags&flagHasDTS != 0,
+				Keyframe: h.flags&flagKeyframe != 0,
+				Data:     append([]byte(nil), payload[h.n:]...),
 			}}
 			select {
 			case ch <- tf:

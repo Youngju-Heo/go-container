@@ -36,18 +36,18 @@ func TestTrackInfoTruncated(t *testing.T) {
 
 func TestDataPayloadRoundtrip(t *testing.T) {
 	body := []byte("frame-bytes")
-	p := encodeDataPayload(nil, 5, flagKeyframe, 90000, body)
+	p := encodeDataPayload(nil, 5, flagKeyframe, 90000, 0, body)
 	if len(p) != dataHeaderSize+len(body) {
 		t.Fatalf("len = %d", len(p))
 	}
-	id, flags, pts, err := decodeDataHeader(p)
+	h, err := decodeDataHeader(p)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if id != 5 || flags != flagKeyframe || pts != 90000 || !bytes.Equal(p[dataHeaderSize:], body) {
-		t.Fatalf("id=%d flags=%d pts=%d", id, flags, pts)
+	if h.id != 5 || h.flags != flagKeyframe || h.pts != 90000 || !bytes.Equal(p[h.n:], body) {
+		t.Fatalf("h=%+v", h)
 	}
-	if _, _, _, err := decodeDataHeader(p[:10]); !errors.Is(err, ErrCorrupt) {
+	if _, err := decodeDataHeader(p[:10]); !errors.Is(err, ErrCorrupt) {
 		t.Fatalf("short header: err = %v", err)
 	}
 }
