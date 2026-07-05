@@ -189,4 +189,4 @@ func (r *Reader) Finalized() bool
 계획(`2026-07-04-01-gmc-core-v11-plan.md`) 6개 태스크 전부 구현·리뷰 완료 후
 [코덱 규약 + MKV 변환](2026-07-04-02-gmc-mkv-design.md)까지 이어서 구현, main
 병합(739aa9d). B-frame 수용은 MKV 실샘플(비단조 pts)로 실전 검증됨.
-잔여 후속: `-race` 검증(amd64/linux, 이 머신 미지원) — G(resync)는 계속 연기.
+`-race` 검증 완료(2026-07-05, CGO_ENABLED=1 — 전 패키지 통과). G(resync)는 계속 연기.

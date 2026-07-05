@@ -302,7 +302,8 @@ Writer 직접 기록·영상은 경계 이후 첫 키프레임에서 전환 (커
 영상 없는 파일 SeekHead Cues 댕글링 제거.
 
 잔여 후속 (비차단):
-- `-race` 검증: amd64/linux 환경 또는 CI (이 개발 머신 windows/arm64 미지원)
+- ~~`-race` 검증~~ — **완료 (2026-07-05)**: CGO_ENABLED=1 + race detector로 전 패키지
+  통과 (gmc ok 2.92s 25+Example / gmc/codec ok 2.04s 9 / mkv ok 3.22s 20)
 - §4.2 수동 재생 검증: VLC·mkvalidator (ffprobe 교차 확인은 샘플 제작 시 수행)
 - Opus `CodecDelay`/`SeekPreRoll` 요소 미보존 (OpusHead의 preSkip은 CodecPrivate로
   보존 — 일반 재생 무영향, 갭리스 편집 엄밀성에서만 차이)
