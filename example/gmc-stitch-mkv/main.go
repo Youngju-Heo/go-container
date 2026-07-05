@@ -1,7 +1,8 @@
 // Command gmc-stitch-mkv assembles one Matroska file out of an absolute time
 // window spanning three committed GMC segment samples
 // (sample/test-clip-000.gmc / -001 / -002.gmc, see task 1) — built directly
-// with mkv.Muxer (not mkv.Export).
+// with mkv.Muxer (not mkv.Export). The -tracks flag restricts output to the
+// given comma-separated gmc TrackIDs (default: all).
 package main
 
 import (
@@ -11,6 +12,8 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Youngju-Heo/go-container/gmc"
@@ -24,7 +27,19 @@ const matroskaEpochUnixNano = 978307200 * 1_000_000_000
 
 func main() {
 	out := flag.String("out", "", "output mkv path (default: stitched.mkv in cwd, or 2nd positional arg)")
+	tracksFlag := flag.String("tracks", "", "comma-separated gmc TrackIDs to include, e.g. 1,3 (default: all)")
 	flag.Parse()
+
+	var selectedIDs []gmc.TrackID
+	if *tracksFlag != "" {
+		for _, s := range strings.Split(*tracksFlag, ",") {
+			n, err := strconv.ParseUint(strings.TrimSpace(s), 10, 16)
+			if err != nil {
+				log.Fatalf("parse -tracks: %v", err)
+			}
+			selectedIDs = append(selectedIDs, gmc.TrackID(n))
+		}
+	}
 
 	// 1. Resolve arguments: segments dir (default ./sample), output path
 	// (default stitched.mkv in cwd).
@@ -54,7 +69,37 @@ func main() {
 	if !ok {
 		log.Fatalf("%s: missing start time", segPaths[0])
 	}
-	entries, entryIdx, isVideo, isText := buildTrackEntries(seg0.Tracks())
+	seg0Tracks := seg0.Tracks()
+	if len(selectedIDs) > 0 {
+		selected := make(map[gmc.TrackID]bool, len(selectedIDs))
+		for _, id := range selectedIDs {
+			selected[id] = true
+		}
+		for id := range selected {
+			found := false
+			for _, ti := range seg0Tracks {
+				if ti.ID == id {
+					found = true
+					break
+				}
+			}
+			if !found {
+				available := make([]gmc.TrackID, len(seg0Tracks))
+				for i, ti := range seg0Tracks {
+					available[i] = ti.ID
+				}
+				log.Fatalf("unknown track id %d (available: %v)", id, available)
+			}
+		}
+		var filtered []gmc.TrackInfo
+		for _, ti := range seg0Tracks {
+			if selected[ti.ID] {
+				filtered = append(filtered, ti)
+			}
+		}
+		seg0Tracks = filtered
+	}
+	entries, entryIdx, isVideo, isText := buildTrackEntries(seg0Tracks)
 	var videoID gmc.TrackID
 	for id, v := range isVideo {
 		if v {
@@ -141,7 +186,7 @@ func main() {
 		if segStart.After(seekAt) {
 			seekAt = segStart
 		}
-		it, err := r.SeekTime(seekAt)
+		it, err := r.SeekTime(seekAt, selectedIDs...)
 		if err != nil {
 			log.Fatalf("seek %s: %v", segPath, err)
 		}
