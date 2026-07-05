@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -184,5 +185,55 @@ func TestExportRange(t *testing.T) {
 	}
 	if len(ats) != 2 || ats[0] != 60 || ats[1] != 80 {
 		t.Fatalf("audio ts = %v", ats)
+	}
+}
+
+func TestExportTrackSelection(t *testing.T) {
+	src := buildTestGMC(t)
+
+	r, err := gmc.Open(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var videoID, textID gmc.TrackID
+	for _, info := range r.Tracks() {
+		switch info.Kind {
+		case gmc.KindVideo:
+			videoID = info.ID
+		case gmc.KindData:
+			textID = info.ID
+		}
+	}
+	r.Close()
+
+	dst := filepath.Join(t.TempDir(), "sel.mkv")
+	res, err := Export(src, dst, ExportOptions{Tracks: []gmc.TrackID{videoID, textID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Tracks != 2 || len(res.SkippedTracks) != 0 {
+		t.Fatalf("result = %+v", res)
+	}
+	d, pkts := demuxAll(t, dst)
+	trs := d.Tracks()
+	if len(trs) != 2 || trs[0].CodecID != codec.CodecAVC || trs[1].CodecID != codec.CodecTextUTF8 {
+		t.Fatalf("tracks = %+v", trs)
+	}
+	var videoCount, subCount int
+	for _, p := range pkts {
+		switch p.Track {
+		case trs[0].Number:
+			videoCount++
+		case trs[1].Number:
+			subCount++
+		}
+	}
+	if videoCount != 4 || subCount != 1 || len(pkts) != 5 {
+		t.Fatalf("packet counts: video=%d sub=%d total=%d", videoCount, subCount, len(pkts))
+	}
+
+	_, err = Export(src, filepath.Join(t.TempDir(), "bad.mkv"), ExportOptions{Tracks: []gmc.TrackID{99}})
+	if err == nil || !strings.Contains(err.Error(), "unknown track") {
+		t.Fatalf("expected unknown track error, got %v", err)
 	}
 }

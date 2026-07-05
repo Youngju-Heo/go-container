@@ -1,6 +1,7 @@
 package mkv
 
 import (
+	"fmt"
 	"os"
 
 	"github.com/Youngju-Heo/go-container/gmc"
@@ -10,6 +11,12 @@ import (
 type ExportOptions struct {
 	Range          Range
 	TimestampScale uint64 // 0 -> 1_000_000 (1 ms)
+
+	// Tracks restricts export to the given GMC track IDs, in any order.
+	// nil or empty exports all tracks (default behavior). Any ID not present
+	// in the source file is an error; a selected track that is otherwise
+	// unsupported still follows the normal skip semantics.
+	Tracks []gmc.TrackID
 }
 
 // Export converts a GMC file (written under the gmc/codec conventions) into
@@ -34,10 +41,37 @@ func Export(gmcPath, mkvPath string, opts ExportOptions) (*Result, error) {
 		text   bool
 		info   gmc.TrackInfo
 	}
+	tracks := r.Tracks()
+	if len(opts.Tracks) > 0 {
+		selected := make(map[gmc.TrackID]bool, len(opts.Tracks))
+		for _, id := range opts.Tracks {
+			selected[id] = true
+		}
+		for id := range selected {
+			found := false
+			for _, info := range tracks {
+				if info.ID == id {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return nil, fmt.Errorf("mkv: unknown track id %d", id)
+			}
+		}
+		var filtered []gmc.TrackInfo
+		for _, info := range tracks {
+			if selected[info.ID] {
+				filtered = append(filtered, info)
+			}
+		}
+		tracks = filtered
+	}
+
 	var maps []trackMap
 	var entries []TrackEntry
 	num := uint64(1)
-	for _, info := range r.Tracks() {
+	for _, info := range tracks {
 		te, ok := mapTrackOut(info, num)
 		if !ok {
 			res.SkippedTracks = append(res.SkippedTracks, SkippedTrack{Number: uint64(info.ID), CodecID: info.Codec, Reason: "unsupported codec or bad envelope"})

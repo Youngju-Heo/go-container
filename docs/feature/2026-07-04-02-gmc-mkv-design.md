@@ -180,6 +180,7 @@ type ImportOptions struct {
 type ExportOptions struct {
     Range          Range
     TimestampScale uint64 // 0이면 1_000_000 (1ms)
+    Tracks         []gmc.TrackID // 비어있으면 전체, 지정 시 해당 트랙만 (미존재 ID는 오류)
 }
 
 type SkippedTrack struct {
