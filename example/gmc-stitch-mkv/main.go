@@ -101,9 +101,11 @@ func main() {
 	}
 	entries, entryIdx, isVideo, isText := buildTrackEntries(seg0Tracks)
 	var videoID gmc.TrackID
+	hasVideo := false
 	for id, v := range isVideo {
 		if v {
 			videoID = id
+			hasVideo = true
 		}
 	}
 	seg0.Close()
@@ -132,20 +134,25 @@ func main() {
 	// (mkvmerge-style keyframe snap). SeekTime on the video track alone
 	// positions right at that sync point; its first frame's absolute time
 	// is the origin. This is a dedicated pre-pass — it closes before the
-	// main loop reopens segment 0.
-	r0, err := gmc.Open(segPaths[0])
-	if err != nil {
-		log.Fatalf("open %s: %v", segPaths[0], err)
+	// main loop reopens segment 0. Without a selected video track no snap is
+	// needed (audio/text are exact-cut, every frame a sync point), so the
+	// origin is simply the window start.
+	originNs := winStartNs
+	if hasVideo {
+		r0, err := gmc.Open(segPaths[0])
+		if err != nil {
+			log.Fatalf("open %s: %v", segPaths[0], err)
+		}
+		it0, err := r0.SeekTime(winStart, videoID)
+		if err != nil {
+			log.Fatalf("seek segment 0 for origin: %v", err)
+		}
+		if !it0.Next() {
+			log.Fatalf("segment 0: no video frame at/after window start")
+		}
+		originNs = firstStart.UnixNano() + int64(it0.Frame().PTS)*1_000_000 // 1ms timebase
+		r0.Close()
 	}
-	it0, err := r0.SeekTime(winStart, videoID)
-	if err != nil {
-		log.Fatalf("seek segment 0 for origin: %v", err)
-	}
-	if !it0.Next() {
-		log.Fatalf("segment 0: no video frame at/after window start")
-	}
-	originNs := firstStart.UnixNano() + int64(it0.Frame().PTS)*1_000_000 // 1ms timebase
-	r0.Close()
 
 	// 6. Open the output and write the Matroska header. DateUTC is the
 	// origin (the actual first output timestamp), not winStart.
