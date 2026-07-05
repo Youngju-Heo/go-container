@@ -1,16 +1,14 @@
-// Command gmc-stitch-mkv simulates a DVR-style segmented recorder (3 GMC
-// files back to back) and stitches an absolute-time window spanning all three
-// — starting and ending mid-segment — into one fresh Matroska file built
-// directly with mkv.Muxer (not mkv.Export).
+// Command gmc-stitch-mkv assembles one Matroska file out of an absolute time
+// window spanning three committed GMC segment samples
+// (sample/test-clip-000.gmc / -001 / -002.gmc, see task 1) — built directly
+// with mkv.Muxer (not mkv.Export).
 package main
 
 import (
-	"encoding/binary"
 	"flag"
 	"fmt"
 	"io"
 	"log"
-	"math"
 	"os"
 	"path/filepath"
 	"time"
@@ -20,92 +18,116 @@ import (
 	"github.com/Youngju-Heo/go-container/mkv"
 )
 
-const (
-	sampleRate      = 8000
-	samplesPerFrame = 400 // 50ms
-	segmentSeconds  = 2
-	segmentCount    = 3
-
-	// matroskaEpochUnixNano is 2001-01-01T00:00:00 UTC, the Matroska DateUTC
-	// epoch (mkv.mkvEpochUnixNano mirrors this but is unexported).
-	matroskaEpochUnixNano = 978307200 * 1_000_000_000
-)
+// matroskaEpochUnixNano is 2001-01-01T00:00:00 UTC, the Matroska DateUTC
+// epoch (mkv.mkvEpochUnixNano mirrors this but is unexported).
+const matroskaEpochUnixNano = 978307200 * 1_000_000_000
 
 func main() {
-	// 1. Parse flags and set up the output directory.
-	outDir := "./stitch-out"
+	out := flag.String("out", "", "output mkv path (default: stitched.mkv in cwd, or 2nd positional arg)")
 	flag.Parse()
+
+	// 1. Resolve arguments: segments dir (default ./sample), output path
+	// (default stitched.mkv in cwd).
+	segDir := "./sample"
 	if flag.NArg() > 0 {
-		outDir = flag.Arg(0)
+		segDir = flag.Arg(0)
 	}
-	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		log.Fatalf("mkdir: %v", err)
+	outPath := "stitched.mkv"
+	if *out != "" {
+		outPath = *out
+	} else if flag.NArg() > 1 {
+		outPath = flag.Arg(1)
 	}
-
-	// 2. Generate 3 GMC segments back to back (2s each, distinct tone per
-	// segment: audio track + text track with one event per second).
-	base := time.Unix(1_700_000_000, 0).UTC() // fixed base time for deterministic output
-	freqs := [segmentCount]float64{440, 554, 659}
-	segPaths := make([]string, segmentCount)
-	for i := 0; i < segmentCount; i++ {
-		segPaths[i] = filepath.Join(outDir, fmt.Sprintf("seg-%03d.gmc", i))
-		start := base.Add(time.Duration(i) * segmentSeconds * time.Second)
-		if err := writeSegment(segPaths[i], i, start, freqs[i]); err != nil {
-			log.Fatalf("write segment %d: %v", i, err)
-		}
+	segPaths := []string{
+		filepath.Join(segDir, "test-clip-000.gmc"),
+		filepath.Join(segDir, "test-clip-001.gmc"),
+		filepath.Join(segDir, "test-clip-002.gmc"),
 	}
 
-	// 3. The stitch window spans [base+1s, base+5s): starts mid-seg-000,
-	// covers all of seg-001, ends mid-seg-002.
-	winStart := base.Add(1 * time.Second)
-	winEnd := base.Add(5 * time.Second)
-	winStartNs := winStart.UnixNano()
-	winEndNs := winEnd.UnixNano()
-	outPath := filepath.Join(outDir, "out.mkv")
-
-	// 4. Inspect segment 0's track layout — writeSegment always adds audio
-	// first, text second — and build the matching Matroska tracks.
+	// 2. Open segment 0 to build the output Matroska track list (numbers
+	// 1..N in gmc-ID order) and record its start time.
 	seg0, err := gmc.Open(segPaths[0])
 	if err != nil {
 		log.Fatalf("open %s: %v", segPaths[0], err)
 	}
-	tracks := seg0.Tracks()
-	audioTI, textTI := tracks[0], tracks[1]
+	firstStart, ok := seg0.StartTime()
+	if !ok {
+		log.Fatalf("%s: missing start time", segPaths[0])
+	}
+	entries, entryIdx, isVideo, isText := buildTrackEntries(seg0.Tracks())
+	var videoID gmc.TrackID
+	for id, v := range isVideo {
+		if v {
+			videoID = id
+		}
+	}
 	seg0.Close()
 
-	ap, audioPriv, err := codec.DecodeAudioPrivate(audioTI.Private)
+	// 3. Open the last segment only to read its start time, which fixes the
+	// far end of the absolute window.
+	segLast, err := gmc.Open(segPaths[len(segPaths)-1])
 	if err != nil {
-		log.Fatalf("decode audio private: %v", err)
+		log.Fatalf("open %s: %v", segPaths[len(segPaths)-1], err)
 	}
-	textPriv, err := codec.DecodeTextPrivate(textTI.Private)
-	if err != nil {
-		log.Fatalf("decode text private: %v", err)
+	lastStart, ok := segLast.StartTime()
+	if !ok {
+		log.Fatalf("%s: missing start time", segPaths[len(segPaths)-1])
 	}
-	const audioNum, textNum = uint64(1), uint64(2)
-	audioID, textID := audioTI.ID, textTI.ID
-	entries := []mkv.TrackEntry{
-		{Number: audioNum, Type: 2, CodecID: audioTI.Codec, CodecPrivate: audioPriv,
-			SamplingFrequency: float64(ap.SampleRate), Channels: uint64(ap.Channels), BitDepth: uint64(ap.BitDepth)},
-		{Number: textNum, Type: 17, CodecID: textTI.Codec, CodecPrivate: textPriv},
-	}
+	segLast.Close()
 
-	// 5. Open the output file and write the Matroska header.
+	// 4. The stitch window is [firstSegStart+5s, lastSegStart+5s) — starts
+	// mid-segment-0 and ends mid-segment-2.
+	winStart := firstStart.Add(5 * time.Second)
+	winEnd := lastStart.Add(5 * time.Second)
+	winStartNs := winStart.UnixNano()
+	winEndNs := winEnd.UnixNano()
+
+	// 5. Determine the output timeline origin: the window start (5s) falls
+	// mid-GOP, so the video must actually start at the preceding keyframe
+	// (mkvmerge-style keyframe snap). SeekTime on the video track alone
+	// positions right at that sync point; its first frame's absolute time
+	// is the origin. This is a dedicated pre-pass — it closes before the
+	// main loop reopens segment 0.
+	r0, err := gmc.Open(segPaths[0])
+	if err != nil {
+		log.Fatalf("open %s: %v", segPaths[0], err)
+	}
+	it0, err := r0.SeekTime(winStart, videoID)
+	if err != nil {
+		log.Fatalf("seek segment 0 for origin: %v", err)
+	}
+	if !it0.Next() {
+		log.Fatalf("segment 0: no video frame at/after window start")
+	}
+	originNs := firstStart.UnixNano() + int64(it0.Frame().PTS)*1_000_000 // 1ms timebase
+	r0.Close()
+
+	// 6. Open the output and write the Matroska header. DateUTC is the
+	// origin (the actual first output timestamp), not winStart.
 	f, err := os.Create(outPath)
 	if err != nil {
 		log.Fatalf("create %s: %v", outPath, err)
 	}
 	defer f.Close()
-
-	m := mkv.NewMuxer(f, 1_000_000) // 1ms scale
-	info := mkv.FileInfo{DateUTC: winStartNs - matroskaEpochUnixNano, HasDate: true}
-	if err := m.WriteHeader(info, entries, map[string]string{"TITLE": "stitched window"}); err != nil {
+	m := mkv.NewMuxer(f, 1_000_000) // 1ms scale, matching the segments' timebase
+	info := mkv.FileInfo{DateUTC: originNs - matroskaEpochUnixNano, HasDate: true}
+	title := fmt.Sprintf("stitched %s..%s", winStart.Sub(firstStart), winEnd.Sub(firstStart))
+	if err := m.WriteHeader(info, entries, map[string]string{"TITLE": title}); err != nil {
 		log.Fatalf("write header: %v", err)
 	}
 
-	// 6. Walk each segment in order, seeking into the window and copying
-	// packets that fall inside [winStart, winEnd) with rebased timestamps.
-	var frames int
-	var maxTS int64
+	// 7. Walk the 3 segments in order, seeking each into the window and
+	// copying frames that fall inside it with rebased timestamps.
+	// Video: no start filter needed (the iterator already begins at the
+	// snap keyframe, before winStart — the "warm-up" GOP); it stops at the
+	// first keyframe at/after winEnd, keeping the cut GOP-granular.
+	// Audio/text: exact cut at [winStart, winEnd) — every frame is its own
+	// sync point, so no snap is needed.
+	var frames, maxTS int64
+	videoDone := false
+	counts := map[uint64]int{}
+	firstTS := map[uint64]int64{}
+	lastTS := map[uint64]int64{}
 	for _, segPath := range segPaths {
 		r, err := gmc.Open(segPath)
 		if err != nil {
@@ -113,10 +135,8 @@ func main() {
 		}
 		segStart, ok := r.StartTime()
 		if !ok {
-			log.Fatalf("segment %s: missing start time", segPath)
+			log.Fatalf("%s: missing start time", segPath)
 		}
-		// SeekTime clamps a pre-start target to the beginning of the stream,
-		// so segments entirely inside the window can simply seek to winStart.
 		seekAt := winStart
 		if segStart.After(seekAt) {
 			seekAt = segStart
@@ -128,34 +148,43 @@ func main() {
 
 		for it.Next() {
 			fr := it.Frame()
-			var absNs int64
-			var p mkv.Packet
-			if it.Track() == audioID {
-				absNs = segStart.UnixNano() + int64(fr.PTS)*1_000_000_000/sampleRate
-				p = mkv.Packet{Track: audioNum, Data: fr.Data}
-			} else if it.Track() == textID {
-				absNs = segStart.UnixNano() + int64(fr.PTS)*1_000_000 // ms timebase -> ns
+			id := it.Track()
+			absNs := segStart.UnixNano() + int64(fr.PTS)*1_000_000
+
+			if isVideo[id] {
+				if videoDone || absNs < originNs {
+					continue
+				}
+				if fr.Keyframe && absNs >= winEndNs {
+					videoDone = true // GOP-granular stop: this keyframe starts the next window
+					continue
+				}
+			} else if absNs < winStartNs || absNs >= winEndNs {
+				continue
+			}
+
+			num := entries[entryIdx[id]].Number
+			pkt := mkv.Packet{Track: num, Keyframe: fr.Keyframe, Data: fr.Data}
+			if isText[id] {
 				dur, txt, derr := codec.DecodeTextFrame(fr.Data)
 				if derr != nil {
-					continue // non-conforming payload: skip frame
+					log.Fatalf("decode text frame (track %d): %v", id, derr)
 				}
-				p = mkv.Packet{Track: textNum, Duration: int64(dur), Data: []byte(txt)}
-			} else {
-				continue
+				pkt.Duration = int64(dur)
+				pkt.Data = []byte(txt)
 			}
-			if absNs < winStartNs || absNs >= winEndNs {
-				// Exact cut at the window edge — fine here since every GMC
-				// frame in this example is a keyframe; a video track would
-				// need to snap the start to the preceding keyframe instead.
-				continue
-			}
-			p.Keyframe = true
-			p.Timestamp = (absNs - winStartNs) / 1_000_000
-			if err := m.WritePacket(p); err != nil {
+			pkt.Timestamp = (absNs - originNs) / 1_000_000
+			if err := m.WritePacket(pkt); err != nil {
 				log.Fatalf("write packet: %v", err)
 			}
-			if p.Timestamp > maxTS {
-				maxTS = p.Timestamp
+
+			counts[num]++
+			if _, seen := firstTS[num]; !seen {
+				firstTS[num] = pkt.Timestamp
+			}
+			lastTS[num] = pkt.Timestamp
+			if pkt.Timestamp > maxTS {
+				maxTS = pkt.Timestamp
 			}
 			frames++
 		}
@@ -165,82 +194,67 @@ func main() {
 		r.Close()
 	}
 
-	// 7. Finalize and report.
+	// 8. Finalize the output.
 	if err := m.Finalize(float64(maxTS)); err != nil {
 		log.Fatalf("finalize: %v", err)
 	}
-	fmt.Printf("stitched %d segments -> %s (window %s..%s)\n", segmentCount, outPath, winStart.Sub(base), winEnd.Sub(base))
-	fmt.Printf("packets written: %d\n", frames)
+	fmt.Printf("stitched 3 segments -> %s (window %s..%s, %d frames)\n", outPath, winStart.Sub(firstStart), winEnd.Sub(firstStart), frames)
+	for _, te := range entries {
+		fmt.Printf("  #%d %s: packets=%d first_ts=%dms last_ts=%dms\n", te.Number, trackKindName(te.Type), counts[te.Number], firstTS[te.Number], lastTS[te.Number])
+	}
 
-	// 8. Re-demux and print stats, confirming the stitched window is one
-	// continuous timeline.
+	// 9. Re-demux the output and print per-track stats, confirming it reads
+	// back as one continuous timeline.
 	if err := verify(outPath); err != nil {
 		log.Fatalf("verify: %v", err)
 	}
 }
 
-// writeSegment creates one GMC segment file: a PCM audio track (a distinct
-// tone per segment) and a text track with one event per second.
-func writeSegment(path string, idx int, start time.Time, freq float64) error {
-	// A small checkpoint threshold keeps the audio index dense (same
-	// rationale as gmc-basic) even though each segment is written in well
-	// under a second of wall-clock time.
-	w, err := gmc.Create(path, gmc.CreateOptions{CheckpointBytes: 4096})
-	if err != nil {
-		return fmt.Errorf("create: %w", err)
-	}
-
-	audioID, err := w.AddTrack(gmc.TrackInfo{
-		Kind: gmc.KindAudio, Codec: codec.CodecPCM,
-		TimebaseNum: 1, TimebaseDen: sampleRate,
-		Private: codec.EncodeAudioPrivate(codec.AudioParams{
-			SampleRate: sampleRate, Channels: 1, BitDepth: 16,
-		}, nil),
-	})
-	if err != nil {
-		return fmt.Errorf("add audio track: %w", err)
-	}
-
-	textID, err := w.AddTrack(gmc.TrackInfo{
-		Kind: gmc.KindData, Codec: codec.CodecTextUTF8,
-		TimebaseNum: 1, TimebaseDen: 1000,
-		Private: codec.EncodeTextPrivate(nil),
-	})
-	if err != nil {
-		return fmt.Errorf("add text track: %w", err)
-	}
-
-	if err := w.SetStartTime(start); err != nil {
-		return fmt.Errorf("set start time: %w", err)
-	}
-
-	for sec := 0; sec < segmentSeconds; sec++ {
-		absSec := idx*segmentSeconds + sec
-		text := fmt.Sprintf("seg %d t=%ds", idx, absSec)
-		if err := w.WriteFrame(textID, gmc.Frame{PTS: uint64(sec * 1000), Keyframe: true, Data: codec.EncodeTextFrame(900, text)}); err != nil {
-			return fmt.Errorf("write text frame: %w", err)
-		}
-		for f := 0; f < sampleRate/samplesPerFrame; f++ {
-			off := sec*sampleRate + f*samplesPerFrame
-			if err := w.WriteFrame(audioID, gmc.Frame{PTS: uint64(off), Keyframe: true, Data: sineFrame(freq, off)}); err != nil {
-				return fmt.Errorf("write audio frame: %w", err)
+// buildTrackEntries converts a segment's GMC tracks (already sorted by ID)
+// into Matroska TrackEntries numbered 1..N in the same order, decoding each
+// track's codec private envelope per its Kind.
+func buildTrackEntries(tracks []gmc.TrackInfo) ([]mkv.TrackEntry, map[gmc.TrackID]int, map[gmc.TrackID]bool, map[gmc.TrackID]bool) {
+	entries := make([]mkv.TrackEntry, 0, len(tracks))
+	entryIdx := make(map[gmc.TrackID]int, len(tracks))
+	isVideo := make(map[gmc.TrackID]bool, len(tracks))
+	isText := make(map[gmc.TrackID]bool, len(tracks))
+	for _, ti := range tracks {
+		te := mkv.TrackEntry{Number: uint64(len(entries) + 1), CodecID: ti.Codec}
+		switch ti.Kind {
+		case gmc.KindVideo:
+			vp, priv, err := codec.DecodeVideoPrivate(ti.Private)
+			if err != nil {
+				log.Fatalf("decode video private (track %d): %v", ti.ID, err)
 			}
+			te.Type = 1 // video
+			te.CodecPrivate = priv
+			te.PixelWidth, te.PixelHeight = uint64(vp.Width), uint64(vp.Height)
+			isVideo[ti.ID] = true
+		case gmc.KindAudio:
+			ap, priv, err := codec.DecodeAudioPrivate(ti.Private)
+			if err != nil {
+				log.Fatalf("decode audio private (track %d): %v", ti.ID, err)
+			}
+			te.Type = 2 // audio
+			te.CodecPrivate = priv
+			te.SamplingFrequency = float64(ap.SampleRate)
+			if ap.OutputSampleRate > 0 {
+				te.OutputSamplingFrequency = float64(ap.OutputSampleRate)
+			}
+			te.Channels, te.BitDepth = uint64(ap.Channels), uint64(ap.BitDepth)
+		case gmc.KindData:
+			priv, err := codec.DecodeTextPrivate(ti.Private)
+			if err != nil {
+				log.Fatalf("decode text private (track %d): %v", ti.ID, err)
+			}
+			te.Type = 17 // subtitle
+			te.CodecPrivate = priv
+			isText[ti.ID] = true
 		}
+		entryIdx[ti.ID] = len(entries)
+		entries = append(entries, te)
 	}
-
-	return w.Finalize()
-}
-
-// sineFrame renders samplesPerFrame int16 LE samples of a sine tone starting
-// at sample offset offSamples.
-func sineFrame(freq float64, offSamples int) []byte {
-	data := make([]byte, samplesPerFrame*2)
-	for i := 0; i < samplesPerFrame; i++ {
-		t := float64(offSamples+i) / sampleRate
-		v := int16(3000 * math.Sin(2*math.Pi*freq*t))
-		binary.LittleEndian.PutUint16(data[i*2:], uint16(v))
-	}
-	return data
+	return entries, entryIdx, isVideo, isText
 }
 
 // verify re-opens the stitched file with mkv.Demuxer and prints per-track
@@ -260,7 +274,7 @@ func verify(path string) error {
 		return err
 	}
 
-	fmt.Printf("tracks: %d\n", len(d.Tracks()))
+	fmt.Printf("verify %s: tracks=%d\n", path, len(d.Tracks()))
 
 	type stat struct {
 		count       int
