@@ -77,11 +77,29 @@ Kind별 파라미터 (TrackInfo.Kind로 해석 분기):
          channels u8, bitDepth u8(0=미지정)
   Data(텍스트): (파라미터 없음)
 그 뒤: privateLen u32 + CodecPrivate 원본
-       (avcC / hvcC / OpusHead / AudioSpecificConfig / FLAC 헤더블록)
 ```
 
 모든 정수는 리틀 엔디언. MKV SamplingFrequency(float)는 정수 Hz로 반올림해
 담는다(실사용 값은 모두 정수).
+
+**코덱별 CodecPrivate 규격 — Matroska 규격을 바이트 그대로 따른다.** envelope 뒤에
+붙는 CodecPrivate의 내용은 GMC가 별도로 정의하지 않으며, Matroska codec mappings
+(https://www.matroska.org/technical/codec_specs.html)가 각 코덱에 대해 규정한
+CodecPrivate를 무변환으로 담는다. gmc를 직접 사용하는 애플리케이션도 아래 규격으로
+Private를 구성하면 된다:
+
+| CodecID | CodecPrivate 내용 | 규격 |
+|---|---|---|
+| `V_MPEG4/ISO/AVC` | AVCDecoderConfigurationRecord (avcC) | ISO/IEC 14496-15 |
+| `V_MPEGH/ISO/HEVC` | HEVCDecoderConfigurationRecord (hvcC) | ISO/IEC 14496-15 |
+| `A_OPUS` | OpusHead 식별 헤더 | RFC 7845 §5.1 |
+| `A_AAC` | AudioSpecificConfig (raw, ADTS 없음) | ISO/IEC 14496-3 |
+| `A_FLAC` | "fLaC" 시그니처 + STREAMINFO 등 첫 오디오 프레임 이전의 전체 메타데이터 블록 | Matroska FLAC 매핑 |
+| `A_PCM/INT/LIT` | **빈 값** — 파라미터는 envelope의 AudioParams(=MKV Audio 요소 거울상) | — |
+| `S_TEXT/UTF8` | 빈 값 | — |
+
+라이브 인제스트(Annex-B H.26x)에서 avcC/hvcC를 조립할 때는 §2.3의
+`BuildAVCC`/`BuildHVCC` 헬퍼를 사용한다.
 
 ### 2.3 API 스케치
 

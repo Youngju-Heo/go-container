@@ -3,6 +3,27 @@
 // Frame.Data, and a small private envelope carrying the MKV TrackEntry
 // Audio/Video parameters alongside the original CodecPrivate. The gmc core
 // itself stays codec-agnostic; this package is the interpretation layer.
+//
+// # Per-codec private data (CodecPrivate)
+//
+// The codecPrivate bytes carried inside the envelope follow the Matroska
+// CodecPrivate specification for each codec, byte for byte
+// (https://www.matroska.org/technical/codec_specs.html). Nothing
+// GMC-specific is added or reinterpreted:
+//
+//	V_MPEG4/ISO/AVC   AVCDecoderConfigurationRecord ("avcC", ISO/IEC 14496-15)
+//	V_MPEGH/ISO/HEVC  HEVCDecoderConfigurationRecord ("hvcC", ISO/IEC 14496-15)
+//	A_OPUS            OpusHead identification header (RFC 7845 §5.1)
+//	A_AAC             AudioSpecificConfig (ISO/IEC 14496-3) — raw, no ADTS
+//	A_FLAC            "fLaC" signature + STREAMINFO and all metadata blocks
+//	                  preceding the first audio frame
+//	A_PCM/INT/LIT     empty — parameters live in AudioParams (the mirror of
+//	                  the MKV TrackEntry Audio element)
+//	S_TEXT/UTF8       empty
+//
+// Consequently a CodecPrivate taken from (or destined for) an MKV file is
+// used as-is, and applications ingesting live streams build the same records
+// (see BuildAVCC/BuildHVCC for the H.26x helpers).
 package codec
 
 import (
