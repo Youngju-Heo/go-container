@@ -57,3 +57,14 @@ func (ix *fileIndex) dump() []cpEntry {
 	}
 	return out
 }
+
+// count returns the total number of index entries across all tracks.
+func (ix *fileIndex) count() int {
+	ix.mu.RLock()
+	defer ix.mu.RUnlock()
+	n := 0
+	for _, es := range ix.tracks {
+		n += len(es)
+	}
+	return n
+}

@@ -25,6 +25,8 @@ type Reader struct {
 	maxPTS  map[TrackID]uint64 // per-track max committed pts (non-live readers)
 
 	finalized bool
+
+	summaries []trackSummary // footer per-track summary; nil for recovered files
 }
 
 // Open opens an existing GMC file. A valid trailer loads everything from the
@@ -146,6 +148,7 @@ func (r *Reader) loadFooter(size int64) error {
 	for _, tr := range tracks {
 		r.tracks[tr.ID] = tr
 	}
+	r.summaries = sums
 	for _, s := range sums {
 		if s.frames > 0 {
 			r.maxPTS[s.track] = s.lastPTS // stores maxPTS since task 2
@@ -361,6 +364,31 @@ func (r *Reader) SeekTime(t time.Time, tracks ...TrackID) (*Iterator, error) {
 // trailer. Live readers always report false (the file is still being written).
 func (r *Reader) Finalized() bool {
 	return r.finalized
+}
+
+// TrackSummary is a per-track storage summary derived from the footer.
+type TrackSummary struct {
+	Track    TrackID
+	FirstPTS uint64
+	LastPTS  uint64
+	Frames   uint64
+}
+
+// Summaries returns per-track footer summaries and the total number of sync
+// points in the index. For finalized files the summaries come from the footer
+// (Frames accurate). For recovered (non-finalized) files there is no footer,
+// so the summary slice is nil; the sync-point count still reflects the
+// recovery scan.
+func (r *Reader) Summaries() ([]TrackSummary, int) {
+	sync := r.idx.count()
+	if r.summaries == nil {
+		return nil, sync
+	}
+	out := make([]TrackSummary, len(r.summaries))
+	for i, s := range r.summaries {
+		out[i] = TrackSummary{Track: s.track, FirstPTS: s.firstPTS, LastPTS: s.lastPTS, Frames: s.frames}
+	}
+	return out, sync
 }
 
 // Close closes the reader's file handle.
