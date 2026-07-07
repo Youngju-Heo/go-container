@@ -12,6 +12,10 @@ const (
 
 	formatVersion = 1
 
+	// Version is the file format version this package reads and writes. Open
+	// rejects files carrying any other version, so any opened file is Version.
+	Version = formatVersion
+
 	headerFixedSize = 20 // magic(4)+version(2)+flags(2)+tagsAreaLen(4)+privateLen(4)+crc(4)
 	trailerSize     = 16 // footerOffset(8)+crc(4)+endMagic(4)
 

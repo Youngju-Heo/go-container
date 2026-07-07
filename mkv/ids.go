@@ -23,6 +23,7 @@ const (
 	idTimestampScale uint32 = 0x2AD7B1
 	idDuration       uint32 = 0x4489
 	idDateUTC        uint32 = 0x4461
+	idTitle          uint32 = 0x7BA9
 	idMuxingApp      uint32 = 0x4D80
 	idWritingApp     uint32 = 0x5741
 

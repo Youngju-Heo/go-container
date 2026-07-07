@@ -24,6 +24,7 @@ func buildTestMKV(t *testing.T, clusters []byte) []byte {
 	info = appendUintElement(info, idTimestampScale, 1000000)
 	info = appendFloatElement(info, idDuration, 5000) // 5s in scale units
 	info = appendUintElement(info, idDateUTC, 0)      // placeholder; parsed as signed
+	info = appendStringElement(info, idTitle, "demo-title")
 
 	var video []byte
 	video = appendUintElement(video, idPixelWidth, 1280)
@@ -84,6 +85,9 @@ func TestDemuxerHeaderInfoTracks(t *testing.T) {
 	}
 	if d.Info().TimestampScale != 1000000 || d.Info().Duration != 5000 || !d.Info().HasDate {
 		t.Fatalf("info = %+v", d.Info())
+	}
+	if d.Info().Title != "demo-title" {
+		t.Fatalf("title = %q", d.Info().Title)
 	}
 	trs := d.Tracks()
 	if len(trs) != 3 {

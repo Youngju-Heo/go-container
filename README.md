@@ -135,6 +135,15 @@ go run ./example/mkv-info sample/video-clip.mkv
 go run ./example/gmc-stitch-mkv          # sample/의 GMC 세그먼트를 읽어 stitched.mkv 생성
 ```
 
+### CLI (`cmd/`)
+
+- `cmd/media-info` — gmc/mkv 파일의 저장 상태(타이틀·헤더·미디어·태그·인덱스 요약)를 JSON으로 출력하는 CLI. `--info-all`, `--info-header|media|tag|index yes|no`(섹션별 포함 여부, 인덱스는 기본 no), `--output`(파일로 저장), `--help` 옵션 지원.
+
+```sh
+go run ./cmd/media-info --info-all sample/test-clip.mkv
+go run ./cmd/media-info --info-index yes sample/test-clip-000.gmc
+```
+
 ### 테스트 샘플 (`sample/`)
 
 | 파일 | 구성 | 용도 |
