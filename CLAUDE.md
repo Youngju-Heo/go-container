@@ -79,8 +79,8 @@
 
 **모든 개발은 기획/설계->상세계획->구현/테스트->리뷰 순서로 개발을 진행하라.**
 
-- 기획/설계 : superpowers/brainstorming 스킬, Fable 모델 사용
-- 상세개발계획 : superpowers/writing-plans 스킬, Fable 모델 사용
+- 기획/설계 : superpowers/brainstorming 스킬, Opus 모델 사용
+- 상세개발계획 : superpowers/writing-plans 스킬, Opus 모델 사용
 - 구현/테스트 : superpowers/subagent-driven-development, superpowers/test-driven-development 스킬, Sonnet 5 모델 사용
   - (SDD 진행 중 태스크별 리뷰는 구현 단계에 속하므로 Sonnet 5로 진행)
 - 최종리뷰 : superpowers/requesting-code-review 스킬로 전체 브랜치를 1회 리뷰, Opus 모델 사용
