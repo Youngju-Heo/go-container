@@ -28,6 +28,7 @@ type FileInfo struct {
 	Duration       float64 // in TimestampScale units, 0 unknown
 	DateUTC        int64   // ns since 2001-01-01T00:00:00 UTC
 	HasDate        bool
+	Title          string // Segment Info Title, "" if absent
 }
 
 // Demuxer reads a Matroska file sequentially: header metadata up front,
@@ -165,6 +166,8 @@ func (d *Demuxer) parseInfo(body []byte) {
 		case idDateUTC:
 			d.info.DateUTC = int64(parseUint(b))
 			d.info.HasDate = true
+		case idTitle:
+			d.info.Title = string(b)
 		}
 	}
 }
