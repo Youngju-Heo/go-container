@@ -101,7 +101,7 @@ media-info [options ...] <filename.gmc | filename.mkv>
   "title": "My Clip",
   "header": {
     "timestampScale": 1000000,
-    "duration": 10.0,
+    "duration": 5000,
     "dateUTC": "2026-07-07T00:00:00Z"
   },
   "media": {
@@ -127,6 +127,7 @@ media-info [options ...] <filename.gmc | filename.mkv>
   산출할 수 없다. 따라서 `index` 는 `null`. gmc 는 footer 로부터 스캔 없이 요약
   가능하므로 값이 채워진다. 이 비대칭은 의도된 설계다.
 - **날짜/시각**: gmc `startTime`, mkv `dateUTC` 는 RFC3339(UTC) 문자열, 없으면 `null`.
+- **mkv `duration`**: 저장된 원시 값 그대로 `TimestampScale` 단위로 출력한다(초 단위 아님). 초로 환산하려면 같은 객체의 `timestampScale`(ns/단위)를 곱한다: `duration × timestampScale ÷ 1e9`. "저장 상태 요약"이라는 도구 성격에 맞춰 원시 메타데이터를 무변환으로 전달한다.
 
 ## 6. 검증 (성공 기준)
 
