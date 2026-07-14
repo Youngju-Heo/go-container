@@ -24,6 +24,9 @@ type Reader struct {
 	tracks  map[TrackID]TrackInfo
 	maxPTS  map[TrackID]uint64 // per-track max committed pts (non-live readers)
 
+	firstPTS map[TrackID]uint64 // per-track first data-chunk pts (recovery scan)
+	frames   map[TrackID]uint64 // per-track data-chunk count (recovery scan)
+
 	finalized bool
 
 	summaries []trackSummary // footer per-track summary; nil for recovered files
@@ -77,6 +80,8 @@ func newReaderFromFile(f *os.File) (*Reader, error) {
 		tags:        tags,
 		tracks:      map[TrackID]TrackInfo{},
 		maxPTS:      map[TrackID]uint64{},
+		firstPTS:    map[TrackID]uint64{},
+		frames:      map[TrackID]uint64{},
 	}
 	if err := r.loadFooter(size); err != nil {
 		r.scan(size)
@@ -113,6 +118,10 @@ func (r *Reader) scan(size int64) {
 			tail = tail[:0] // everything before this checkpoint is covered
 		case chunkData:
 			if h, derr := decodeDataHeader(payload); derr == nil {
+				if _, seen := r.frames[h.id]; !seen {
+					r.firstPTS[h.id] = h.pts
+				}
+				r.frames[h.id]++
 				if v, ok := r.maxPTS[h.id]; !ok || h.pts > v {
 					r.maxPTS[h.id] = h.pts
 				}
