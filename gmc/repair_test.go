@@ -1,6 +1,8 @@
 package gmc
 
 import (
+	"bytes"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -87,5 +89,74 @@ func TestRepairFinalizesCrashFile(t *testing.T) {
 	}
 	if _, ok := r.idx.seek(video, 57000); !ok {
 		t.Fatal("sync point missing after repair")
+	}
+}
+
+func TestRepairIdempotent(t *testing.T) {
+	path, _ := buildCrashFile(t, time.Unix(1700000000, 0))
+
+	res1, err := Repair(path)
+	if err != nil || !res1.Repaired {
+		t.Fatalf("first repair: res=%+v err=%v", res1, err)
+	}
+	after1, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res2, err := Repair(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res2.Repaired {
+		t.Fatal("second repair: Repaired = true, want false (already finalized)")
+	}
+	after2, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(after1, after2) {
+		t.Fatal("second repair modified the file")
+	}
+	if res2.Frames != 20 || res2.Size != int64(len(after2)) {
+		t.Fatalf("no-op result: Frames=%d Size=%d fileSize=%d", res2.Frames, res2.Size, len(after2))
+	}
+}
+
+func TestRepairAlreadyFinalized(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ok.gmc")
+	w, err := Create(path, CreateOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.SetStartTime(time.Unix(1700000000, 0))
+	video, _ := w.AddTrack(TrackInfo{Kind: KindVideo, Codec: "h264", TimebaseNum: 1, TimebaseDen: 90000})
+	w.WriteFrame(video, Frame{PTS: 0, Keyframe: true, Data: []byte("kf")})
+	w.WriteFrame(video, Frame{PTS: 3000, Data: []byte("p")})
+	if err := w.Finalize(); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := Repair(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Repaired {
+		t.Fatal("Repaired = true on already-finalized file")
+	}
+	if res.Frames != 2 || len(res.Summaries) != 1 ||
+		res.Summaries[0].Frames != 2 || res.Summaries[0].LastPTS != 3000 {
+		t.Fatalf("result = %+v", res)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("repair modified an already-finalized file")
 	}
 }
