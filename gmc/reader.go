@@ -36,6 +36,13 @@ func Open(path string) (*Reader, error) {
 	if err != nil {
 		return nil, err
 	}
+	return newReaderFromFile(f)
+}
+
+// newReaderFromFile builds a Reader over an already-open file handle (any open
+// mode that supports ReadAt). It loads from the footer when a valid trailer is
+// present, otherwise recovers by a full CRC scan. It closes f on any error.
+func newReaderFromFile(f *os.File) (*Reader, error) {
 	hdr, headerLen, err := decodeFileHeader(f)
 	if err != nil {
 		f.Close()
