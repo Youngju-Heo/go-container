@@ -24,6 +24,9 @@ type Reader struct {
 	tracks  map[TrackID]TrackInfo
 	maxPTS  map[TrackID]uint64 // per-track max committed pts (non-live readers)
 
+	firstPTS map[TrackID]uint64 // per-track first data-chunk pts (recovery scan)
+	frames   map[TrackID]uint64 // per-track data-chunk count (recovery scan)
+
 	finalized bool
 
 	summaries []trackSummary // footer per-track summary; nil for recovered files
@@ -36,6 +39,13 @@ func Open(path string) (*Reader, error) {
 	if err != nil {
 		return nil, err
 	}
+	return newReaderFromFile(f)
+}
+
+// newReaderFromFile builds a Reader over an already-open file handle (any open
+// mode that supports ReadAt). It loads from the footer when a valid trailer is
+// present, otherwise recovers by a full CRC scan. It closes f on any error.
+func newReaderFromFile(f *os.File) (*Reader, error) {
 	hdr, headerLen, err := decodeFileHeader(f)
 	if err != nil {
 		f.Close()
@@ -70,6 +80,8 @@ func Open(path string) (*Reader, error) {
 		tags:        tags,
 		tracks:      map[TrackID]TrackInfo{},
 		maxPTS:      map[TrackID]uint64{},
+		firstPTS:    map[TrackID]uint64{},
+		frames:      map[TrackID]uint64{},
 	}
 	if err := r.loadFooter(size); err != nil {
 		r.scan(size)
@@ -106,6 +118,10 @@ func (r *Reader) scan(size int64) {
 			tail = tail[:0] // everything before this checkpoint is covered
 		case chunkData:
 			if h, derr := decodeDataHeader(payload); derr == nil {
+				if _, seen := r.frames[h.id]; !seen {
+					r.firstPTS[h.id] = h.pts
+				}
+				r.frames[h.id]++
 				if v, ok := r.maxPTS[h.id]; !ok || h.pts > v {
 					r.maxPTS[h.id] = h.pts
 				}
