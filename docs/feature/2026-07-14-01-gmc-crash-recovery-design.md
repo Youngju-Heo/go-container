@@ -155,6 +155,7 @@ for _, o := range orphans {          // status="recording"
 | 파일 자체가 없음(행만 존재) | `Open` 실패 → 레코더가 행 삭제. |
 | 트레일러/footer 손상(부분 마감) | 스캔이 마지막 유효 청크까지 복구 → 그 지점으로 재마감. |
 | 크래시가 청크 중간 truncate | 마지막 **완전** 청크까지만 유효(스캔이 `committed`에서 멈춤) → 손실은 크래시 직전 미완 프레임뿐. |
+| Repair 도중 재크래시(footer는 썼으나 trailer 전) | 무해. 재기동 스캔이 footer chunk를 unknown으로 건너뛰어 `committed`에 포함시키고 재-Repair가 그 위에 새 footer를 append. 리더는 `chunkData`만 프레임으로 취급하므로(iterator/follow) orphan footer는 무시됨 — 프레임 손실·손상 없이 바이트 몇 개만 낭비. `Writer.Finalize`의 기존 비원자성과 동일. |
 
 ---
 
