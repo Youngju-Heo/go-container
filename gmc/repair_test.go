@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -197,6 +198,67 @@ func TestRepairZeroFrames(t *testing.T) {
 	defer r.Close()
 	if r.Finalized() {
 		t.Fatal("zero-frame file should remain unfinalized")
+	}
+}
+
+// writeMixed writes an identical multi-track sequence (video + audio + an
+// empty data track) and either Finalizes or Closes (crash) based on finalize.
+func writeMixed(t *testing.T, path string, finalize bool) {
+	t.Helper()
+	w, err := Create(path, CreateOptions{CheckpointBytes: 200, CheckpointInterval: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.SetStartTime(time.Unix(1700000000, 0))
+	video, _ := w.AddTrack(TrackInfo{Kind: KindVideo, Codec: "h264", TimebaseNum: 1, TimebaseDen: 90000})
+	audio, _ := w.AddTrack(TrackInfo{Kind: KindAudio, Codec: "flac", TimebaseNum: 1, TimebaseDen: 48000})
+	w.AddTrack(TrackInfo{Kind: KindData, Codec: "meta", TimebaseNum: 1, TimebaseDen: 1000}) // no frames
+	for i := 0; i < 12; i++ {
+		w.WriteFrame(video, Frame{PTS: uint64(i * 3000), Keyframe: i%5 == 0, Data: make([]byte, 40)})
+	}
+	for i := 0; i < 8; i++ {
+		w.WriteFrame(audio, Frame{PTS: uint64(i * 1024), Keyframe: true, Data: make([]byte, 20)})
+	}
+	if finalize {
+		if err := w.Finalize(); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func footerSummaries(t *testing.T, path string) []TrackSummary {
+	t.Helper()
+	r, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	if !r.Finalized() {
+		t.Fatal("expected a finalized file")
+	}
+	sums, _ := r.Summaries()
+	return sums
+}
+
+func TestRepairFooterMatchesFinalize(t *testing.T) {
+	dir := t.TempDir()
+	fin := filepath.Join(dir, "finalized.gmc")
+	rep := filepath.Join(dir, "repaired.gmc")
+	writeMixed(t, fin, true)
+	writeMixed(t, rep, false)
+
+	if _, err := Repair(rep); err != nil {
+		t.Fatal(err)
+	}
+
+	want := footerSummaries(t, fin)
+	got := footerSummaries(t, rep)
+	if !reflect.DeepEqual(want, got) {
+		t.Fatalf("summaries mismatch:\n finalize = %+v\n repair   = %+v", want, got)
 	}
 }
 
