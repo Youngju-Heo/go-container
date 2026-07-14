@@ -160,3 +160,66 @@ func TestRepairAlreadyFinalized(t *testing.T) {
 		t.Fatal("repair modified an already-finalized file")
 	}
 }
+
+func TestRepairZeroFrames(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "empty.gmc")
+	w, err := Create(path, CreateOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil { // crash before any frame
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := Repair(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Repaired || res.Frames != 0 {
+		t.Fatalf("result = %+v, want Repaired=false Frames=0", res)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("zero-frame repair modified the file")
+	}
+	// File must remain a valid, unfinalized GMC (no bogus footer written).
+	r, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	if r.Finalized() {
+		t.Fatal("zero-frame file should remain unfinalized")
+	}
+}
+
+func TestRepairTornTail(t *testing.T) {
+	data, _, _, _ := buildUnfinalized(t, 1<<30) // no checkpoint -> last chunk is Data
+	path := writeTemp(t, data[:len(data)-3])    // torn: drop last 3 bytes
+
+	res, err := Repair(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Repaired || res.Frames != 19 {
+		t.Fatalf("result = %+v, want Repaired=true Frames=19", res)
+	}
+	r, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	if !r.Finalized() {
+		t.Fatal("not finalized after repair")
+	}
+	if got := countFrames(t, r); got != 19 {
+		t.Fatalf("frames = %d, want 19 (torn frame dropped)", got)
+	}
+}
